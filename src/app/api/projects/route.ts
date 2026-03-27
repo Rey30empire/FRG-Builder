@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeProject } from "@/lib/api-serializers";
+import { canAccessProject, resolveScopedUserId } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { DEFAULT_USER_ID, ensureDefaultUser } from "@/lib/default-user";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get("userId") || DEFAULT_USER_ID;
+    const userId = resolveScopedUserId(auth.user, searchParams.get("userId"));
     const status = searchParams.get("status");
 
     const where: Record<string, unknown> = { userId };
@@ -21,10 +25,13 @@ export async function GET(request: NextRequest) {
         estimates: {
           include: {
             takeoffItems: true,
+            emails: true,
+            proposalDelivery: true,
           },
         },
         emails: true,
         projectMemory: true,
+        bidOpportunity: true,
       },
       orderBy: { updatedAt: "desc" },
     });
@@ -44,8 +51,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { name, address, client, clientEmail, clientPhone, deadline, userId } = body;
+    const { name, address, client, clientEmail, clientPhone, deadline } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -54,13 +64,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!userId) {
-      await ensureDefaultUser();
-    }
-
     const project = await db.project.create({
       data: {
-        userId: userId || DEFAULT_USER_ID,
+        userId: auth.user.id,
         name,
         address,
         client,
@@ -91,13 +97,24 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id, ...updates } = body;
+    const { id, userId: _userId, ...updates } = body;
 
     if (!id) {
       return NextResponse.json(
         { success: false, error: "Project ID is required" },
         { status: 400 }
+      );
+    }
+
+    const projectAccess = await canAccessProject(auth.user, id);
+    if (!projectAccess) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -126,6 +143,9 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 
@@ -133,6 +153,14 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Project ID is required" },
         { status: 400 }
+      );
+    }
+
+    const projectAccess = await canAccessProject(auth.user, id);
+    if (!projectAccess) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
       );
     }
 

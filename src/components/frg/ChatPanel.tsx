@@ -210,11 +210,27 @@ export function ChatPanel({
     { icon: Sparkles, text: "Explain the estimating process step by step" },
   ],
 }: ChatPanelProps) {
-  const { messages, input, setInput, isTyping, addMessage, setIsTyping } = useChatStore();
+  const { messages, input, setInput, isTyping, addMessage, setMessages, setIsTyping } = useChatStore();
   const { activeModule, activeUser, activeProject, activeConversation, setActiveConversation } = useAppStore();
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [isFocused, setIsFocused] = React.useState(false);
+
+  const syncConversation = React.useEffectEvent(async (conversationId: string) => {
+    const response = await fetch(`/api/chat?conversationId=${conversationId}`);
+    const payload = await response.json();
+
+    if (!payload?.success) {
+      throw new Error(payload?.error || "Unable to load conversation");
+    }
+
+    setMessages(
+      (payload.data || []).map((message: Message) => ({
+        ...message,
+        createdAt: new Date(message.createdAt),
+      }))
+    );
+  });
 
   // Scroll to bottom when messages change
   React.useEffect(() => {
@@ -223,8 +239,41 @@ export function ChatPanel({
     }
   }, [messages, isTyping]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadConversation() {
+      if (!activeConversation?.id) {
+        return;
+      }
+
+      try {
+        await syncConversation(activeConversation.id);
+      } catch (error) {
+        if (!cancelled) {
+          addMessage({
+            id: `${Date.now()}-load-error`,
+            conversationId: activeConversation.id,
+            role: "assistant",
+            content:
+              error instanceof Error
+                ? `No pude cargar la conversacion: ${error.message}`
+                : "No pude cargar la conversacion.",
+            createdAt: new Date(),
+          });
+        }
+      }
+    }
+
+    void loadConversation();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversation?.id, addMessage, syncConversation]);
+
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !activeUser) return;
 
     const content = input.trim();
     const userMessage: Message = {
@@ -248,7 +297,6 @@ export function ChatPanel({
         body: JSON.stringify({
           message: content,
           conversationId: activeConversation?.id,
-          userId: activeUser?.id,
           projectId: activeProject?.id,
           module: activeModule,
         }),
@@ -263,7 +311,7 @@ export function ChatPanel({
       if (payload.data?.conversationId) {
         setActiveConversation({
           id: payload.data.conversationId,
-          userId: activeUser?.id || "default-user",
+          userId: activeUser.id,
           projectId: activeProject?.id,
           module: activeModule,
           title: content.slice(0, 50),
@@ -372,7 +420,7 @@ export function ChatPanel({
             
             <Button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() || !activeUser}
               size="icon"
               className={cn(
                 "shrink-0 rounded-lg transition-all duration-200",

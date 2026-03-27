@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { useAppStore } from "@/store";
 import {
   AppSidebar,
@@ -10,11 +11,56 @@ import {
   BoostModule,
   AdminModule,
 } from "@/components/frg";
+import { AuthScreen } from "@/components/auth/AuthScreen";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import type { AppUser } from "@/types";
+
+interface SessionEnvelope {
+  success: boolean;
+  data?: {
+    user: AppUser | null;
+  };
+}
 
 export default function BuilderFRGLLC() {
-  const { activeModule, sidebarOpen } = useAppStore();
+  const { activeModule, sidebarOpen, setActiveUser, setAvailableUsers } = useAppStore();
+  const [authState, setAuthState] = React.useState<"loading" | "authenticated" | "unauthenticated">("loading");
+
+  const syncSession = React.useEffectEvent(async () => {
+    const response = await fetch("/api/auth/session", {
+      cache: "no-store",
+    });
+
+    const payload = (await response.json()) as SessionEnvelope;
+    const nextUser = payload.success ? payload.data?.user || null : null;
+
+    React.startTransition(() => {
+      setActiveUser(nextUser);
+      setAvailableUsers(nextUser ? [nextUser] : []);
+      setAuthState(nextUser ? "authenticated" : "unauthenticated");
+    });
+  });
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadSession() {
+      try {
+        await syncSession();
+      } finally {
+        if (cancelled) {
+          return;
+        }
+      }
+    }
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [syncSession]);
 
   const renderModule = () => {
     switch (activeModule) {
@@ -34,6 +80,26 @@ export default function BuilderFRGLLC() {
         return <DashboardModule />;
     }
   };
+
+  if (authState === "loading") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-300">
+        Loading session...
+      </div>
+    );
+  }
+
+  if (authState === "unauthenticated") {
+    return (
+      <AuthScreen
+        onAuthenticated={(user) => {
+          setActiveUser(user);
+          setAvailableUsers([user]);
+          setAuthState("authenticated");
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 flex">

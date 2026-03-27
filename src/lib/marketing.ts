@@ -110,6 +110,59 @@ export function buildProposalEmailMetadata(attachmentUrl: string): EmailMetadata
   };
 }
 
+export function buildProposalEmailMetadataDetailed(input: {
+  attachmentUrl: string;
+  bidFormPdfUrl?: string;
+  portalUrl: string;
+  publicPdfUrl: string;
+  provider?: string;
+  providerMessageId?: string;
+}) {
+  return {
+    attachmentLabel: "FRG Proposal PDF",
+    attachmentUrl: input.attachmentUrl,
+    bidFormPdfUrl: input.bidFormPdfUrl,
+    portalUrl: input.portalUrl,
+    publicPdfUrl: input.publicPdfUrl,
+    cta: "Review proposal and confirm next steps",
+    template: "proposal-delivery",
+    generatedBy: "frg-builder",
+    proposalStatus: "sent",
+    provider: input.provider,
+    providerMessageId: input.providerMessageId,
+  } satisfies EmailMetadata;
+}
+
+export function renderTransactionalEmailHtml(input: {
+  title: string;
+  intro?: string;
+  body: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  footer?: string;
+}) {
+  const paragraphs = input.body
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p style="margin:0 0 16px;">${paragraph.replace(/\n/g, "<br />")}</p>`)
+    .join("");
+
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#1f2937;">
+      <h2 style="margin:0 0 16px;color:#111827;">${input.title}</h2>
+      ${input.intro ? `<p style="margin:0 0 16px;color:#4b5563;">${input.intro}</p>` : ""}
+      ${paragraphs}
+      ${
+        input.ctaLabel && input.ctaUrl
+          ? `<div style="margin:8px 0 20px;"><a href="${input.ctaUrl}" style="display:inline-block;background:#ea7d2b;color:white;text-decoration:none;padding:12px 18px;border-radius:999px;font-weight:600;">${input.ctaLabel}</a></div>`
+          : ""
+      }
+      <p style="margin:20px 0 0;color:#6b7280;">${input.footer || "FRG Builder"}</p>
+    </div>
+  `.trim();
+}
+
 export function summarizeCampaignPerformance(campaign: Campaign) {
   const sent = campaign.sent || 0;
   const opened = campaign.opened || 0;

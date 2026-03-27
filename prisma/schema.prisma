@@ -21,20 +21,135 @@ model User {
   avatar        String?
   role          String    @default("user") // user, admin, superadmin
   level         Int       @default(0) // 0-4 permission levels
+  passwordHash  String?
   
   // Memoria de usuario
   userMemory    UserMemory?
+  sessions      Session[]
   
   // Relaciones
   projects      Project[]
+  bidOpportunities BidOpportunity[]
   conversations Conversation[]
   learningItems LearningItem[]
   leads         Lead[]
   campaigns     Campaign[]
   emails        Email[]
+  billingAccount BillingAccount?
+  billingUsageEvents BillingUsageEvent[]
+  aiCredentials UserAiCredential[]
+  customAgents  CustomAgent[]
+  supportTickets SupportTicket[]
+  agentRuns     AgentRun[]
   
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model UserAiCredential {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider            String
+  encryptedKey        String
+  keyHint             String?
+  status              String   @default("pending") // pending, valid, invalid
+  lastValidatedAt     DateTime?
+  lastValidationError String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId, provider])
+}
+
+model CustomAgent {
+  id                     String   @id @default(cuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug                   String
+  name                   String
+  description            String?
+  instructions           String
+  baseSkill              String   @default("project_manager_skill")
+  enabled                Boolean  @default(true)
+  autoRun                Boolean  @default(false)
+  includeProjectContext  Boolean  @default(true)
+  includeDocumentSummary Boolean  @default(true)
+  includeEstimateSnapshot Boolean @default(true)
+  executionMode          String   @default("chat") // chat, pipeline, both
+  pipelineStage          String?  // preflight, takeoff, estimate, delivery, followup
+  requiredLevel          Int      @default(1)
+  reviewRequired         Boolean  @default(true)
+  allowedTools           String?
+  triggerPhrases         String?
+  successCriteria        String?
+  outputSchema           String?
+  sortOrder              Int      @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([userId, slug])
+  @@index([userId, enabled, sortOrder])
+}
+
+model BillingAccount {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planKey               String   @default("starter")
+  status                String   @default("free") // free, trialing, active, past_due, canceled, incomplete
+  billingInterval       String?  // monthly, yearly
+  stripeCustomerId      String?  @unique
+  stripeSubscriptionId  String?  @unique
+  stripePriceId         String?
+  stripeCheckoutSessionId String?
+  currency              String?
+  amountCents           Int?
+  cancelAtPeriodEnd     Boolean  @default(false)
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  trialEndsAt           DateTime?
+  checkoutCompletedAt   DateTime?
+  portalAccessedAt      DateTime?
+  metadata              String?
+  usageEvents           BillingUsageEvent[]
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([planKey, status])
+}
+
+model BillingUsageEvent {
+  id              String         @id @default(cuid())
+  billingAccountId String
+  billingAccount  BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  metricKey       String
+  quantity        Int            @default(1)
+  source          String
+  referenceId     String?
+  referenceType   String?
+  periodKey       String
+  metadata        String?
+  createdAt       DateTime       @default(now())
+
+  @@index([billingAccountId, periodKey, metricKey])
+  @@index([userId, periodKey, metricKey])
 }
 
 model UserMemory {
@@ -51,6 +166,16 @@ model UserMemory {
   preferredMargins   Float?
   laborRates         String?  // JSON con rates por trade
   overheadPercent    Float?
+  emailFromName      String?
+  emailFromAddress   String?
+  emailReplyTo       String?
+  smtpHost           String?
+  smtpPort           Int?
+  smtpSecure         Boolean  @default(false)
+  smtpUser           String?
+  smtpPassword       String?
+  aiProviderConfig   String?
+  agentWorkspaceConfig String?
   
   // Aprendizaje
   topicsStudied     String?  // JSON array
@@ -81,6 +206,7 @@ model CompanyMemory {
   logo              String?
   primaryColor      String?
   proposalTemplate  String?
+  aiProviderConfig  String?
   
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -109,9 +235,51 @@ model Project {
   estimates       Estimate[]
   emails          Email[]
   projectMemory   ProjectMemory?
+  bidOpportunity  BidOpportunity?
+  agentRuns       AgentRun[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model BidOpportunity {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId           String?  @unique
+  project             Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  name                String
+  client              String?
+  clientEmail         String?
+  clientPhone         String?
+  estimatorContact    String?
+  dueDate             DateTime?
+  jobWalkDate         DateTime?
+  rfiDueDate          DateTime?
+  projectSize         String?
+  location            String?
+  address             String?
+  latitude            Float?
+  longitude           Float?
+  scopePackage        String?
+  description         String?
+  tradeInstructions   String?
+  bidFormRequired     Boolean  @default(false)
+  bidFormInstructions String?
+  bidFormData         String?
+  submitPackage       String?
+  source              String?
+  externalUrl         String?
+  status              String   @default("undecided") // undecided, accepted, submitted, won, archived
+  notes               String?
+  submittedAt         DateTime?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([dueDate])
 }
 
 model ProjectMemory {
@@ -149,6 +317,11 @@ model Document {
   // Análisis
   analyzed        Boolean  @default(false)
   analysisResult  String?  // JSON con resultado del análisis
+  relevanceScore  Float?
+  selectedForTakeoff Boolean @default(false)
+  selectedForProposalContext Boolean @default(false)
+  requiresHumanReview Boolean @default(false)
+  selectionReason String?
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -181,11 +354,14 @@ model Estimate {
   takeoffItems    TakeoffItem[]
   emails          Email[]
   proposalData    String?
+  proposalDelivery ProposalDelivery?
   
   // Tiempo y condiciones
   duration        Int?     // días estimados
   weatherFactor   Float?
+  marketFactor    Float?
   riskFactor      Float?
+  regionalContext String?
   sentAt          DateTime?
   viewedAt        DateTime?
   approvedAt      DateTime?
@@ -193,6 +369,28 @@ model Estimate {
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model ProposalDelivery {
+  id                String   @id @default(cuid())
+  estimateId        String   @unique
+  estimate          Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  tokenHash         String   @unique
+  recipientName     String?
+  recipientEmail    String?
+  senderMessage     String?
+  responseMessage   String?
+  status            String   @default("draft") // draft, sent, viewed, approved, rejected
+  provider          String?
+  providerMessageId String?
+  sentAt            DateTime?
+  viewedAt          DateTime?
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  viewCount         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model TakeoffItem {
@@ -235,6 +433,7 @@ model Conversation {
   
   // Mensajes
   messages        Message[]
+  agentRuns       AgentRun[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -257,6 +456,47 @@ model Message {
   createdAt       DateTime @default(now())
 }
 
+model AgentRun {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId       String?
+  project         Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  conversationId  String?
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  trigger         String        @default("chat") // chat, quick-action, auto-chat
+  mode            String        @default("manual") // manual, assisted, agentic
+  status          String        @default("running") // running, completed, failed
+  prompt          String?
+  summary         String?
+  output          String?
+  steps           AgentRunStep[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+}
+
+model AgentRunStep {
+  id              String    @id @default(cuid())
+  runId           String
+  run             AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agentKey        String
+  agentLabel      String
+  status          String    @default("completed") // completed, skipped, failed
+  tool            String?
+  skill           String?
+  summary         String?
+  details         String?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([runId, createdAt])
+}
+
 // ============================================
 // FRG LEARN - Learning Module
 // ============================================
@@ -274,8 +514,11 @@ model LearningItem {
   
   // Progreso
   completed       Boolean  @default(false)
+  progress        Int      @default(0)
+  bookmarked      Boolean  @default(false)
   score           Float?
   timeSpent       Int?     // minutos
+  lastStudiedAt   DateTime?
   
   // Contenido
   content         String?  // JSON con el contenido
@@ -302,6 +545,10 @@ model Lead {
   
   // Estado
   status          String   @default("new") // new, contacted, qualified, proposal, closed
+  priority        String   @default("medium") // low, medium, high
+  estimatedValue  Float?
+  lastContactAt   DateTime?
+  expectedCloseDate DateTime?
   
   // Tracking
   interactions    String?  // JSON array de interacciones
@@ -324,7 +571,11 @@ model Campaign {
   name            String
   type            String   // email, social, ads
   target          String?  // kitchen_remodel, bathroom, etc.
-  status          String   @default("draft") // draft, active, completed
+  status          String   @default("draft") // draft, scheduled, active, paused, completed
+  budget          Float?
+  scheduledAt     DateTime?
+  launchedAt      DateTime?
+  completedAt     DateTime?
   
   // Contenido
   content         String?  // JSON con posts/emails
@@ -418,4 +669,62 @@ model ActivityLog {
   tool            String?
   
   createdAt       DateTime @default(now())
+}
+
+model SupportTicket {
+  id              String   @id @default(cuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  title           String
+  description     String
+  status          String   @default("open") // open, investigating, waiting, resolved
+  priority        String   @default("medium") // low, medium, high, urgent
+  channel         String   @default("internal") // internal, email, phone
+  tags            String?  // JSON array
+  resolutionNotes String?
+  lastResponseAt  DateTime?
+  resolvedAt      DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, priority])
+}
+
+model OpsIncident {
+  id              String   @id @default(cuid())
+
+  title           String
+  summary         String
+  affectedService String?
+  severity        String   @default("warning") // info, warning, critical
+  status          String   @default("open") // open, investigating, monitoring, resolved
+  source          String?  // manual, health-scan, maintenance
+  details         String?  // JSON object
+  startedAt       DateTime @default(now())
+  resolvedAt      DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, severity])
+}
+
+model MaintenanceRun {
+  id              String   @id @default(cuid())
+
+  action          String
+  trigger         String   @default("manual") // manual, cron
+  status          String   @default("completed") // completed, failed, skipped
+  summary         String?
+  details         String?  // JSON object
+  startedAt       DateTime @default(now())
+  finishedAt      DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([action, createdAt])
+  @@index([status, createdAt])
 }

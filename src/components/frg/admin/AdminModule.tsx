@@ -1,1232 +1,980 @@
 "use client";
 
 import * as React from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
+  Activity,
+  AlertTriangle,
+  Bot,
+  Database,
+  Download,
+  Loader2,
+  RefreshCw,
+  Save,
   Settings,
   Shield,
-  Database,
-  Activity,
-  Zap,
-  Power,
-  Key,
-  LayoutDashboard,
-  Wrench,
-  ScrollText,
-  Users,
-  MemoryStick,
-  FileText,
-  ChevronRight,
-  Cpu,
-  Plug,
-  Search,
-  Filter,
-  RefreshCw,
-  CheckCircle,
-  XCircle,
-  AlertTriangle,
-  Clock,
-  User,
-  Building2,
-  FolderKanban,
-  MoreHorizontal,
-  Bell,
-  Save,
-  Download,
-  Trash2,
 } from "lucide-react";
+import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useAppStore, useSkillsStore, useToolsStore } from "@/store";
-import { PERMISSION_LABELS, type PermissionLevel, type Module } from "@/types";
+import { PERMISSION_LABELS, type Module, type PermissionLevel } from "@/types";
 import { ModuleHeader } from "@/components/frg/ModuleHeader";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
-// ============================================
-// TYPES
-// ============================================
+type AdminTab = "dashboard" | "skills" | "tools" | "permissions" | "logs" | "settings";
+type HealthStatus = "healthy" | "warning" | "critical";
 
-type AdminSection = "dashboard" | "skills" | "tools" | "rules" | "permissions" | "memory" | "logs" | "settings";
-
-interface LogEntry {
-  id: string;
-  timestamp: Date;
-  level: "info" | "warning" | "error" | "success";
-  module: Module;
-  action: string;
-  details: string;
-  user?: string;
+interface ApiEnvelope<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
 }
 
-interface SystemMetric {
+interface AdminMetric {
+  id: string;
   label: string;
   value: string | number;
-  change?: number;
-  status: "healthy" | "warning" | "critical";
+  status: HealthStatus;
 }
 
-interface ConnectorStatus {
+interface AdminHealthItem {
   id: string;
-  name: string;
-  type: string;
-  status: "connected" | "disconnected" | "error";
-  lastSync?: Date;
-}
-
-interface AIModel {
-  id: string;
-  name: string;
-  provider: string;
-  enabled: boolean;
-  usage: number;
-  limit?: number;
-}
-
-interface AutomationSwitch {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  lastTriggered?: Date;
-}
-
-// ============================================
-// MOCK DATA
-// ============================================
-
-const mockSystemMetrics: SystemMetric[] = [
-  { label: "Active Users", value: 12, change: 3, status: "healthy" },
-  { label: "API Calls Today", value: 1247, change: -5, status: "healthy" },
-  { label: "Memory Usage", value: "2.4 GB", status: "healthy" },
-  { label: "Response Time", value: "142ms", change: 12, status: "warning" },
-];
-
-const mockLogs: LogEntry[] = [
-  {
-    id: "1",
-    timestamp: new Date(Date.now() - 1000 * 60 * 5),
-    level: "info",
-    module: "estimate",
-    action: "Takeoff Complete",
-    details: "Extracted 45 quantities from blueprint",
-    user: "john@builder.com",
-  },
-  {
-    id: "2",
-    timestamp: new Date(Date.now() - 1000 * 60 * 12),
-    level: "success",
-    module: "boost",
-    action: "Email Sent",
-    details: "Proposal email delivered to client@example.com",
-    user: "sarah@builder.com",
-  },
-  {
-    id: "3",
-    timestamp: new Date(Date.now() - 1000 * 60 * 25),
-    level: "warning",
-    module: "agent",
-    action: "Rate Limit",
-    details: "API rate limit approaching (85% used)",
-  },
-  {
-    id: "4",
-    timestamp: new Date(Date.now() - 1000 * 60 * 45),
-    level: "error",
-    module: "estimate",
-    action: "Parse Error",
-    details: "Failed to extract text from corrupted PDF",
-    user: "mike@builder.com",
-  },
-  {
-    id: "5",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60),
-    level: "info",
-    module: "learn",
-    action: "Lesson Completed",
-    details: "User completed 'Foundation Basics' module",
-    user: "newbie@builder.com",
-  },
-];
-
-const mockConnectors: ConnectorStatus[] = [
-  { id: "1", name: "OpenAI API", type: "AI Provider", status: "connected", lastSync: new Date() },
-  { id: "2", name: "Google Drive", type: "Storage", status: "connected", lastSync: new Date(Date.now() - 1000 * 60 * 5) },
-  { id: "3", name: "QuickBooks", type: "Accounting", status: "disconnected" },
-  { id: "4", name: "SendGrid", type: "Email", status: "connected", lastSync: new Date(Date.now() - 1000 * 60 * 2) },
-];
-
-const mockAIModels: AIModel[] = [
-  { id: "1", name: "GPT-4o", provider: "OpenAI", enabled: true, usage: 5420, limit: 10000 },
-  { id: "2", name: "GPT-4o-mini", provider: "OpenAI", enabled: true, usage: 12847 },
-  { id: "3", name: "Claude 3.5 Sonnet", provider: "Anthropic", enabled: true, usage: 3210, limit: 5000 },
-  { id: "4", name: "Gemini Pro", provider: "Google", enabled: false, usage: 0 },
-];
-
-const mockAutomations: AutomationSwitch[] = [
-  { id: "1", name: "Auto-save Conversations", description: "Automatically save chat history", enabled: true, lastTriggered: new Date() },
-  { id: "2", name: "Daily Backup", description: "Backup data to cloud storage daily", enabled: true, lastTriggered: new Date(Date.now() - 1000 * 60 * 60 * 24) },
-  { id: "3", name: "Email Notifications", description: "Send alerts for important events", enabled: false },
-  { id: "4", name: "Auto Tag Documents", description: "Use AI to categorize uploaded files", enabled: true, lastTriggered: new Date(Date.now() - 1000 * 60 * 30) },
-];
-
-const mockMemoryData = {
-  user: {
-    language: "English",
-    explanationStyle: "detailed",
-    companyType: "General Contractor",
-    preferredMargins: 15,
-    recentProjects: ["Downtown Office", "Residential Complex"],
-  },
-  company: {
-    name: "Builder-FRG-LLC",
-    specialties: ["Commercial", "Residential", "Renovation"],
-    workZones: ["Downtown", "Suburbs"],
-    crewCount: 25,
-  },
-  project: {
-    name: "Downtown Office Renovation",
-    addendas: 2,
-    exclusions: ["HVAC", "Elevator"],
-    notes: "Historic building - special permits required",
-  },
-};
-
-// ============================================
-// NAVIGATION ITEM COMPONENT
-// ============================================
-
-interface NavItemProps {
-  icon: React.ElementType;
   label: string;
-  section: AdminSection;
-  active: boolean;
-  onClick: () => void;
-  badge?: number;
+  value: string;
+  status: HealthStatus;
 }
 
-function NavItem({ icon: Icon, label, active, onClick, badge }: NavItemProps) {
+interface AdminSkill {
+  id: string;
+  name: string;
+  displayName: string;
+  description?: string | null;
+  module: Module;
+  enabled: boolean;
+  config?: Record<string, unknown> | null;
+}
+
+interface AdminTool {
+  id: string;
+  name: string;
+  displayName: string;
+  description?: string | null;
+  enabled: boolean;
+  requiredLevel: number;
+}
+
+interface AdminUserRow {
+  id: string;
+  email: string;
+  name?: string | null;
+  role: string;
+  level: number;
+  createdAt?: string;
+  updatedAt?: string;
+  stats: {
+    projects: number;
+    learningItems: number;
+    leads: number;
+    campaigns: number;
+    conversations: number;
+  };
+}
+
+interface AdminLogRow {
+  id: string;
+  createdAt: string;
+  action: string;
+  entity: string;
+  details?: Record<string, unknown> | null;
+  skill?: string | null;
+  tool?: string | null;
+  userName?: string | null;
+  userEmail?: string | null;
+}
+
+interface AdminOverviewResponse {
+  metrics: AdminMetric[];
+  health: AdminHealthItem[];
+  skills: AdminSkill[];
+  tools: AdminTool[];
+  users: AdminUserRow[];
+  logs: AdminLogRow[];
+  settings: {
+    nodeEnv: string;
+    database: { kind: string; label: string };
+    storage: { driver: string; label: string };
+    email: { provider: string; from: string; replyTo?: string | null };
+    aiProviders: {
+      primary: string;
+      active: string | null;
+      providers: Record<
+        string,
+        { enabled: boolean; model: string; hasApiKey: boolean; label: string }
+      >;
+    };
+    latestBackup?: { id: string; path: string; createdAt: string; uploadsIncluded: boolean } | null;
+  };
+  company:
+    | {
+        name: string;
+        specialties?: string[];
+        workZones?: string[];
+        crewInfo?: Record<string, unknown>;
+        baseRates?: Record<string, unknown>;
+        primaryColor?: string | null;
+        proposalTemplate?: string | null;
+        aiProviderConfig?: Record<string, unknown> | null;
+      }
+    | null;
+  permissionSummary: Array<{
+    level: PermissionLevel;
+    count: number;
+    capabilities: string[];
+  }>;
+  counts: {
+    campaigns: number;
+    emails: number;
+    conversations: number;
+    supportTickets?: number;
+    incidents?: number;
+    maintenanceRuns?: number;
+  };
+  alerts: string[];
+}
+
+async function readApi<T>(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await fetch(input, init);
+  const payload = (await response.json()) as ApiEnvelope<T>;
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.error || `Request failed with status ${response.status}`);
+  }
+  return payload.data as T;
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function HealthBadge({ status }: { status: HealthStatus }) {
+  const tone =
+    status === "healthy"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+      : status === "warning"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+        : "border-rose-500/30 bg-rose-500/10 text-rose-400";
+
   return (
-    <motion.button
-      whileHover={{ x: 4 }}
-      whileTap={{ scale: 0.98 }}
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 text-left",
-        active
-          ? "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-      )}
-    >
-      <Icon className="h-5 w-5 shrink-0" />
-      <span className="flex-1 text-sm font-medium">{label}</span>
-      {badge !== undefined && (
-        <Badge variant="outline" className="h-5 px-1.5 text-xs border-slate-600 text-slate-400">
-          {badge}
-        </Badge>
-      )}
-      {active && <ChevronRight className="h-4 w-4 text-orange-400" />}
-    </motion.button>
+    <Badge variant="outline" className={tone}>
+      {status}
+    </Badge>
   );
 }
 
-// ============================================
-// METRIC CARD COMPONENT
-// ============================================
-
-function MetricCard({ metric }: { metric: SystemMetric }) {
-  const statusColors = {
-    healthy: "text-emerald-500",
-    warning: "text-amber-500",
-    critical: "text-rose-500",
-  };
-
-  const statusBgColors = {
-    healthy: "bg-emerald-500/10",
-    warning: "bg-amber-500/10",
-    critical: "bg-rose-500/10",
-  };
-
+function MetricCard({ metric }: { metric: AdminMetric }) {
   return (
-    <Card className="bg-slate-900/50 border-slate-800">
+    <Card className="border-slate-800 bg-slate-900/50">
       <CardContent className="p-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-slate-400">{metric.label}</span>
-          <div className={cn("h-2 w-2 rounded-full", statusBgColors[metric.status], statusColors[metric.status])} />
-        </div>
-        <div className="flex items-end gap-2">
-          <span className="text-2xl font-bold text-white">{metric.value}</span>
-          {metric.change !== undefined && (
-            <span className={cn(
-              "text-xs font-medium mb-1",
-              metric.change >= 0 ? "text-emerald-500" : "text-rose-500"
-            )}>
-              {metric.change >= 0 ? "+" : ""}{metric.change}%
-            </span>
-          )}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm text-slate-400">{metric.label}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{metric.value}</p>
+          </div>
+          <HealthBadge status={metric.status} />
         </div>
       </CardContent>
     </Card>
   );
 }
-
-// ============================================
-// LOG ENTRY COMPONENT
-// ============================================
-
-function LogEntryRow({ log }: { log: LogEntry }) {
-  const levelConfig = {
-    info: { icon: Activity, color: "text-blue-500", bg: "bg-blue-500/10" },
-    success: { icon: CheckCircle, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    warning: { icon: AlertTriangle, color: "text-amber-500", bg: "bg-amber-500/10" },
-    error: { icon: XCircle, color: "text-rose-500", bg: "bg-rose-500/10" },
-  };
-
-  const config = levelConfig[log.level];
-  const Icon = config.icon;
-
-  const moduleColors: Record<Module, string> = {
-    dashboard: "text-sky-500",
-    agent: "text-amber-500",
-    estimate: "text-orange-500",
-    learn: "text-emerald-500",
-    boost: "text-rose-500",
-    admin: "text-slate-400",
-  };
-
-  return (
-    <TableRow className="hover:bg-slate-800/50 border-slate-800">
-      <TableCell className="py-3">
-        <div className="flex items-center gap-2">
-          <div className={cn("p-1 rounded", config.bg)}>
-            <Icon className={cn("h-3.5 w-3.5", config.color)} />
-          </div>
-          <span className="text-xs text-slate-500">
-            {log.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        </div>
-      </TableCell>
-      <TableCell>
-        <Badge variant="outline" className={cn("border-slate-700", moduleColors[log.module])}>
-          {log.module}
-        </Badge>
-      </TableCell>
-      <TableCell className="font-medium text-slate-200">{log.action}</TableCell>
-      <TableCell className="text-slate-400 text-sm max-w-xs truncate">{log.details}</TableCell>
-      <TableCell className="text-slate-500 text-sm">{log.user || "System"}</TableCell>
-    </TableRow>
-  );
-}
-
-// ============================================
-// CONNECTOR STATUS COMPONENT
-// ============================================
-
-function ConnectorCard({ connector }: { connector: ConnectorStatus }) {
-  const statusConfig = {
-    connected: { color: "text-emerald-500", bg: "bg-emerald-500/10", label: "Connected" },
-    disconnected: { color: "text-slate-500", bg: "bg-slate-500/10", label: "Disconnected" },
-    error: { color: "text-rose-500", bg: "bg-rose-500/10", label: "Error" },
-  };
-
-  const config = statusConfig[connector.status];
-
-  return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
-      <div className="flex items-center gap-3">
-        <div className={cn("p-2 rounded-lg", config.bg)}>
-          <Plug className={cn("h-4 w-4", config.color)} />
-        </div>
-        <div>
-          <span className="text-sm font-medium text-slate-200">{connector.name}</span>
-          <p className="text-xs text-slate-500">{connector.type}</p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <Badge variant="outline" className={cn("text-xs", config.color, "border-current/20")}>
-          {config.label}
-        </Badge>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-white">
-          <Settings className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// AI MODEL CARD COMPONENT
-// ============================================
-
-function AIModelCard({ model, onToggle }: { model: AIModel; onToggle: () => void }) {
-  const usagePercent = model.limit ? (model.usage / model.limit) * 100 : 0;
-
-  return (
-    <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800/50 border border-slate-700/50">
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "p-2 rounded-lg",
-          model.enabled ? "bg-orange-500/10" : "bg-slate-700/50"
-        )}>
-          <Cpu className={cn("h-4 w-4", model.enabled ? "text-orange-500" : "text-slate-500")} />
-        </div>
-        <div>
-          <span className="text-sm font-medium text-slate-200">{model.name}</span>
-          <p className="text-xs text-slate-500">{model.provider}</p>
-        </div>
-      </div>
-      <div className="flex items-center gap-4">
-        {model.limit && (
-          <div className="w-24">
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="text-slate-400">Usage</span>
-              <span className="text-slate-300">{model.usage.toLocaleString()}</span>
-            </div>
-            <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-              <div
-                className={cn("h-full rounded-full", usagePercent > 80 ? "bg-rose-500" : "bg-orange-500")}
-                style={{ width: `${Math.min(usagePercent, 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
-        <Switch checked={model.enabled} onCheckedChange={onToggle} />
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// AUTOMATION TOGGLE COMPONENT
-// ============================================
-
-function AutomationToggle({ automation, onToggle }: { automation: AutomationSwitch; onToggle: () => void }) {
-  return (
-    <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800/50 border border-slate-700/50">
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "p-2 rounded-lg",
-          automation.enabled ? "bg-emerald-500/10" : "bg-slate-700/50"
-        )}>
-          <Power className={cn("h-4 w-4", automation.enabled ? "text-emerald-500" : "text-slate-500")} />
-        </div>
-        <div>
-          <span className="text-sm font-medium text-slate-200">{automation.name}</span>
-          <p className="text-xs text-slate-500">{automation.description}</p>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        {automation.lastTriggered && (
-          <span className="text-xs text-slate-500">
-            {automation.lastTriggered.toLocaleDateString()}
-          </span>
-        )}
-        <Switch checked={automation.enabled} onCheckedChange={onToggle} />
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// MEMORY VIEWER COMPONENT
-// ============================================
-
-function MemoryViewer({ type, data }: { type: "user" | "company" | "project"; data: Record<string, unknown> }) {
-  const icons = { user: User, company: Building2, project: FolderKanban };
-  const colors = {
-    user: "text-amber-500 bg-amber-500/10",
-    company: "text-blue-500 bg-blue-500/10",
-    project: "text-emerald-500 bg-emerald-500/10",
-  };
-  const Icon = icons[type];
-
-  return (
-    <Card className="bg-slate-900/50 border-slate-800">
-      <CardHeader className="py-3 px-4">
-        <CardTitle className="text-sm font-medium text-slate-200 flex items-center gap-2">
-          <div className={cn("p-1.5 rounded", colors[type])}>
-            <Icon className="h-4 w-4" />
-          </div>
-          {type.charAt(0).toUpperCase() + type.slice(1)} Memory
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="py-2 px-4">
-        <div className="space-y-2">
-          {Object.entries(data).map(([key, value]) => (
-            <div key={key} className="flex items-start gap-2">
-              <span className="text-xs text-slate-500 min-w-24">{key}:</span>
-              <span className="text-sm text-slate-300">
-                {Array.isArray(value)
-                  ? value.join(", ")
-                  : typeof value === "object"
-                  ? JSON.stringify(value)
-                  : String(value)}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-4">
-          <Button variant="outline" size="sm" className="h-7 text-xs border-slate-700 text-slate-300">
-            <Save className="h-3 w-3 mr-1" />
-            Edit
-          </Button>
-          <Button variant="outline" size="sm" className="h-7 text-xs border-slate-700 text-slate-300">
-            <Download className="h-3 w-3 mr-1" />
-            Export
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ============================================
-// SKILL ROW COMPONENT
-// ============================================
-
-function SkillRow({
-  skill,
-  onToggle,
-}: {
-  skill: { id: string; name: string; displayName: string; description: string; module: Module; enabled: boolean };
-  onToggle: () => void;
-}) {
-  const moduleColors: Record<Module, string> = {
-    dashboard: "text-sky-500 border-sky-500/30",
-    agent: "text-amber-500 border-amber-500/30",
-    estimate: "text-orange-500 border-orange-500/30",
-    learn: "text-emerald-500 border-emerald-500/30",
-    boost: "text-rose-500 border-rose-500/30",
-    admin: "text-slate-400 border-slate-500/30",
-  };
-
-  return (
-    <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 transition-colors">
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "p-2 rounded-lg",
-          skill.enabled ? "bg-orange-500/10" : "bg-slate-700/50"
-        )}>
-          <Zap className={cn("h-4 w-4", skill.enabled ? "text-orange-500" : "text-slate-500")} />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-200">{skill.displayName}</span>
-            <Badge variant="outline" className={cn("text-xs", moduleColors[skill.module])}>
-              {skill.module}
-            </Badge>
-          </div>
-          <p className="text-xs text-slate-500 truncate">{skill.description}</p>
-        </div>
-      </div>
-      <Switch checked={skill.enabled} onCheckedChange={onToggle} />
-    </div>
-  );
-}
-
-// ============================================
-// TOOL ROW COMPONENT
-// ============================================
-
-function ToolRow({
-  tool,
-  onToggle,
-}: {
-  tool: { id: string; name: string; displayName: string; description: string; enabled: boolean; requiredLevel: PermissionLevel };
-  onToggle: () => void;
-}) {
-  const levelColors: Record<PermissionLevel, string> = {
-    0: "text-slate-400 border-slate-500/30",
-    1: "text-blue-400 border-blue-500/30",
-    2: "text-amber-400 border-amber-500/30",
-    3: "text-orange-400 border-orange-500/30",
-    4: "text-rose-400 border-rose-500/30",
-  };
-
-  return (
-    <div className="flex items-center justify-between p-4 rounded-lg bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 transition-colors">
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "p-2 rounded-lg",
-          tool.enabled ? "bg-blue-500/10" : "bg-slate-700/50"
-        )}>
-          <Wrench className={cn("h-4 w-4", tool.enabled ? "text-blue-500" : "text-slate-500")} />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-200">{tool.displayName}</span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="outline" className={cn("text-xs", levelColors[tool.requiredLevel])}>
-                  <Key className="h-3 w-3 mr-1" />
-                  L{tool.requiredLevel}
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent className="bg-slate-800 border-slate-700">
-                {PERMISSION_LABELS[tool.requiredLevel]}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-          <p className="text-xs text-slate-500 truncate">{tool.description}</p>
-        </div>
-      </div>
-      <Switch checked={tool.enabled} onCheckedChange={onToggle} />
-    </div>
-  );
-}
-
-// ============================================
-// MAIN ADMIN MODULE COMPONENT
-// ============================================
 
 export function AdminModule({ className }: { className?: string }) {
-  const { activeUser, permissionLevel } = useAppStore();
-  const { skills, toggleSkill } = useSkillsStore();
-  const { tools, toggleTool } = useToolsStore();
-  
-  const [activeSection, setActiveSection] = React.useState<AdminSection>("dashboard");
-  const [aiModels, setAIModels] = React.useState(mockAIModels);
-  const [automations, setAutomations] = React.useState(mockAutomations);
-  const [searchQuery, setSearchQuery] = React.useState("");
+  const { activeUser, activeProject } = useAppStore();
+  const { setSkills } = useSkillsStore();
+  const { setTools } = useToolsStore();
+  const [activeTab, setActiveTab] = React.useState<AdminTab>("dashboard");
+  const [overview, setOverview] = React.useState<AdminOverviewResponse | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+  const [searchLogs, setSearchLogs] = React.useState("");
+  const [isRunningBackup, setIsRunningBackup] = React.useState(false);
+  const [pendingSkillId, setPendingSkillId] = React.useState<string | null>(null);
+  const [pendingToolId, setPendingToolId] = React.useState<string | null>(null);
+  const [pendingUserId, setPendingUserId] = React.useState<string | null>(null);
+  const deferredLogSearch = React.useDeferredValue(searchLogs);
 
-  const navigationItems: { icon: React.ElementType; label: string; section: AdminSection; badge?: number }[] = [
-    { icon: LayoutDashboard, label: "Dashboard", section: "dashboard" },
-    { icon: Zap, label: "Skills", section: "skills", badge: skills.filter(s => s.enabled).length },
-    { icon: Wrench, label: "Tools", section: "tools", badge: tools.filter(t => t.enabled).length },
-    { icon: ScrollText, label: "Rules", section: "rules" },
-    { icon: Shield, label: "Permissions", section: "permissions" },
-    { icon: MemoryStick, label: "Memory", section: "memory" },
-    { icon: FileText, label: "Logs", section: "logs", badge: mockLogs.filter(l => l.level === "error").length },
-    { icon: Settings, label: "Settings", section: "settings" },
-  ];
+  const syncOverview = React.useEffectEvent(async () => {
+    const next = await readApi<AdminOverviewResponse>("/api/admin/overview");
+    React.startTransition(() => {
+      setOverview(next);
+      setSkills(
+        next.skills.map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          displayName: skill.displayName,
+          description: skill.description || "",
+          module: skill.module,
+          enabled: skill.enabled,
+        }))
+      );
+      setTools(
+        next.tools.map((tool) => ({
+          id: tool.id,
+          name: tool.name,
+          displayName: tool.displayName,
+          description: tool.description || "",
+          enabled: tool.enabled,
+          requiredLevel: tool.requiredLevel as PermissionLevel,
+        }))
+      );
+    });
+  });
 
-  const toggleAIModel = (id: string) => {
-    setAIModels(prev => prev.map(m => m.id === id ? { ...m, enabled: !m.enabled } : m));
-  };
+  React.useEffect(() => {
+    let mounted = true;
 
-  const toggleAutomation = (id: string) => {
-    setAutomations(prev => prev.map(a => a.id === id ? { ...a, enabled: !a.enabled } : a));
-  };
+    const load = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        await syncOverview();
+      } catch (nextError) {
+        if (!mounted) return;
+        setError(nextError instanceof Error ? nextError.message : "Unable to load admin overview");
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
 
-  const filteredSkills = skills.filter(s =>
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    s.displayName.toLowerCase().includes(searchQuery.toLowerCase())
+    void load();
+
+    return () => {
+      mounted = false;
+    };
+  }, [syncOverview]);
+
+  const filteredLogs = React.useMemo(() => {
+    const query = deferredLogSearch.trim().toLowerCase();
+    if (!overview?.logs) return [];
+    if (!query) return overview.logs;
+
+    return overview.logs.filter((log) => {
+      const haystack = [
+        log.action,
+        log.entity,
+        log.userName,
+        log.userEmail,
+        log.skill,
+        log.tool,
+        JSON.stringify(log.details || {}),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(query);
+    });
+  }, [deferredLogSearch, overview?.logs]);
+
+  const handleRefresh = React.useCallback(async () => {
+    try {
+      setError(null);
+      setIsLoading(true);
+      await syncOverview();
+      toast({ title: "Admin synced", description: "Live admin data was refreshed." });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to refresh admin data");
+      toast({
+        title: "Refresh failed",
+        description:
+          nextError instanceof Error ? nextError.message : "Unable to refresh admin data",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [syncOverview]);
+
+  const handleSkillToggle = React.useCallback(
+    async (skill: AdminSkill, enabled: boolean) => {
+      try {
+        setPendingSkillId(skill.id);
+        await readApi(`/api/admin/skills`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: skill.id, enabled }),
+        });
+        await syncOverview();
+        toast({
+          title: enabled ? "Skill enabled" : "Skill disabled",
+          description: `${skill.displayName} was updated in Admin Forge.`,
+        });
+      } catch (nextError) {
+        toast({
+          title: "Skill update failed",
+          description:
+            nextError instanceof Error ? nextError.message : "Unable to update skill settings",
+          variant: "destructive",
+        });
+      } finally {
+        setPendingSkillId(null);
+      }
+    },
+    [syncOverview]
   );
 
-  const filteredTools = tools.filter(t =>
-    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    t.displayName.toLowerCase().includes(searchQuery.toLowerCase())
+  const handleToolPatch = React.useCallback(
+    async (tool: AdminTool, patch: Partial<Pick<AdminTool, "enabled" | "requiredLevel">>) => {
+      try {
+        setPendingToolId(tool.id);
+        await readApi(`/api/admin/tools`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: tool.id, ...patch }),
+        });
+        await syncOverview();
+        toast({
+          title: "Tool policy updated",
+          description: `${tool.displayName} permissions are now saved.`,
+        });
+      } catch (nextError) {
+        toast({
+          title: "Tool update failed",
+          description:
+            nextError instanceof Error ? nextError.message : "Unable to update tool policy",
+          variant: "destructive",
+        });
+      } finally {
+        setPendingToolId(null);
+      }
+    },
+    [syncOverview]
   );
+
+  const handleUserLevelChange = React.useCallback(
+    async (user: AdminUserRow, level: PermissionLevel) => {
+      try {
+        setPendingUserId(user.id);
+        await readApi(`/api/users`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: user.id, level }),
+        });
+        await syncOverview();
+        toast({
+          title: "Permission level updated",
+          description: `${user.name || user.email} now uses level ${level}.`,
+        });
+      } catch (nextError) {
+        toast({
+          title: "Permission update failed",
+          description:
+            nextError instanceof Error ? nextError.message : "Unable to update permission level",
+          variant: "destructive",
+        });
+      } finally {
+        setPendingUserId(null);
+      }
+    },
+    [syncOverview]
+  );
+
+  const handleRunBackup = React.useCallback(async () => {
+    try {
+      setIsRunningBackup(true);
+      const result = await readApi<{ output?: string }>(`/api/admin/operations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backup-local" }),
+      });
+      await syncOverview();
+      toast({
+        title: "Backup completed",
+        description: result.output || "A new local backup snapshot was created.",
+      });
+    } catch (nextError) {
+      toast({
+        title: "Backup failed",
+        description:
+          nextError instanceof Error ? nextError.message : "Unable to run local backup",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRunningBackup(false);
+    }
+  }, [syncOverview]);
+
+  const handleExport = React.useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.open("/api/admin/export", "_blank", "noopener,noreferrer");
+  }, []);
 
   return (
-    <div className={cn("flex h-full bg-slate-950", className)}>
-      {/* Left Panel - Admin Navigation */}
-      <motion.aside
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-56 border-r border-slate-800 flex flex-col bg-slate-950"
-      >
-        <div className="p-4 border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-orange-500/10">
-              <Settings className="h-5 w-5 text-orange-500" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Admin Forge</h2>
-              <p className="text-xs text-slate-500">Control Panel</p>
-            </div>
-          </div>
+    <div className={cn("flex h-full flex-col gap-6", className)}>
+      <ModuleHeader
+        title="Admin Forge"
+        description={`Operaciones reales, permisos y trazabilidad. ${
+          activeUser ? `Sesion: ${activeUser.name || activeUser.email}.` : "Sin sesion activa."
+        } ${activeProject ? `Proyecto activo: ${activeProject.name}.` : "Contexto global de admin."}`}
+      />
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
+          <Badge variant="outline" className="border-slate-700 text-slate-300">
+            {overview?.settings.nodeEnv || "development"}
+          </Badge>
+          <Badge variant="outline" className="border-slate-700 text-slate-300">
+            {overview?.settings.database.label || "Database"}
+          </Badge>
+          <Badge variant="outline" className="border-slate-700 text-slate-300">
+            {overview?.settings.storage.label || "Storage"}
+          </Badge>
         </div>
-        
-        <ScrollArea className="flex-1 px-3 py-4">
-          <div className="space-y-1">
-            {navigationItems.map((item) => (
-              <NavItem
-                key={item.section}
-                {...item}
-                active={activeSection === item.section}
-                onClick={() => setActiveSection(item.section)}
-              />
-            ))}
-          </div>
-        </ScrollArea>
-
-        <div className="p-3 border-t border-slate-800">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50">
-            <Shield className="h-4 w-4 text-orange-500" />
-            <span className="text-xs text-slate-400">Access Level:</span>
-            <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400">
-              L{permissionLevel}
-            </Badge>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isLoading}>
+            {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            Export Snapshot
+          </Button>
+          <Button size="sm" onClick={handleRunBackup} disabled={isRunningBackup}>
+            {isRunningBackup ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Run Backup
+          </Button>
         </div>
-      </motion.aside>
-
-      {/* Main Area - Active Section */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <ModuleHeader
-          title={navigationItems.find(n => n.section === activeSection)?.label || "Admin"}
-          description="System configuration and management"
-          quickActions={[
-            { id: "refresh", label: "Refresh", icon: RefreshCw },
-            { id: "export", label: "Export", icon: Download },
-          ]}
-        />
-
-        <ScrollArea className="flex-1 p-6">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeSection}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="space-y-6"
-            >
-              {/* Dashboard Section */}
-              {activeSection === "dashboard" && (
-                <>
-                  {/* System Metrics */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {mockSystemMetrics.map((metric) => (
-                      <MetricCard key={metric.label} metric={metric} />
-                    ))}
-                  </div>
-
-                  {/* Connectors & AI Models */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <Card className="bg-slate-900/50 border-slate-800">
-                      <CardHeader className="py-3 px-4">
-                        <CardTitle className="text-sm font-medium text-slate-200 flex items-center gap-2">
-                          <Plug className="h-4 w-4 text-blue-500" />
-                          Connectors
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2 px-4 space-y-2">
-                        {mockConnectors.map((connector) => (
-                          <ConnectorCard key={connector.id} connector={connector} />
-                        ))}
-                      </CardContent>
-                    </Card>
-
-                    <Card className="bg-slate-900/50 border-slate-800">
-                      <CardHeader className="py-3 px-4">
-                        <CardTitle className="text-sm font-medium text-slate-200 flex items-center gap-2">
-                          <Cpu className="h-4 w-4 text-orange-500" />
-                          AI Models
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2 px-4 space-y-2">
-                        {aiModels.map((model) => (
-                          <AIModelCard
-                            key={model.id}
-                            model={model}
-                            onToggle={() => toggleAIModel(model.id)}
-                          />
-                        ))}
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Automation Switches */}
-                  <Card className="bg-slate-900/50 border-slate-800">
-                    <CardHeader className="py-3 px-4">
-                      <CardTitle className="text-sm font-medium text-slate-200 flex items-center gap-2">
-                        <Power className="h-4 w-4 text-emerald-500" />
-                        Automation Switches
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="py-2 px-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
-                      {automations.map((automation) => (
-                        <AutomationToggle
-                          key={automation.id}
-                          automation={automation}
-                          onToggle={() => toggleAutomation(automation.id)}
-                        />
-                      ))}
-                    </CardContent>
-                  </Card>
-                </>
-              )}
-
-              {/* Skills Section */}
-              {activeSection === "skills" && (
-                <>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="relative flex-1 max-w-md">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                      <Input
-                        placeholder="Search skills..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 bg-slate-900/50 border-slate-800 text-slate-200 placeholder:text-slate-500"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-slate-400">
-                      <span>{filteredSkills.filter(s => s.enabled).length} enabled</span>
-                      <span className="text-slate-600">/</span>
-                      <span>{filteredSkills.length} total</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    {filteredSkills.map((skill) => (
-                      <SkillRow
-                        key={skill.id}
-                        skill={skill}
-                        onToggle={() => toggleSkill(skill.id)}
-                      />
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Tools Section */}
-              {activeSection === "tools" && (
-                <>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="relative flex-1 max-w-md">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                      <Input
-                        placeholder="Search tools..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 bg-slate-900/50 border-slate-800 text-slate-200 placeholder:text-slate-500"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-slate-400">
-                      <span>{filteredTools.filter(t => t.enabled).length} enabled</span>
-                      <span className="text-slate-600">/</span>
-                      <span>{filteredTools.length} total</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    {filteredTools.map((tool) => (
-                      <ToolRow
-                        key={tool.id}
-                        tool={tool}
-                        onToggle={() => toggleTool(tool.id)}
-                      />
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Rules Section */}
-              {activeSection === "rules" && (
-                <Card className="bg-slate-900/50 border-slate-800">
-                  <CardHeader>
-                    <CardTitle className="text-slate-200 flex items-center gap-2">
-                      <ScrollText className="h-5 w-5 text-orange-500" />
-                      Rules Configuration
-                    </CardTitle>
-                    <CardDescription className="text-slate-400">
-                      Define behavioral rules and constraints for the AI assistant
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
-                      <h4 className="text-sm font-medium text-slate-200 mb-2">Default Behavior Rules</h4>
-                      <ul className="space-y-2 text-sm text-slate-400">
-                        <li className="flex items-center gap-2">
-                          <CheckCircle className="h-4 w-4 text-emerald-500" />
-                          Always confirm before creating proposals
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <CheckCircle className="h-4 w-4 text-emerald-500" />
-                          Include material costs in estimates
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <CheckCircle className="h-4 w-4 text-emerald-500" />
-                          Verify quantities before finalizing takeoffs
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <CheckCircle className="h-4 w-4 text-emerald-500" />
-                          Apply company overhead to all calculations
-                        </li>
-                      </ul>
-                    </div>
-                    <Button className="bg-orange-600 hover:bg-orange-700 text-white">
-                      <Settings className="h-4 w-4 mr-2" />
-                      Configure Rules
-                    </Button>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Permissions Section */}
-              {activeSection === "permissions" && (
-                <Card className="bg-slate-900/50 border-slate-800">
-                  <CardHeader>
-                    <CardTitle className="text-slate-200 flex items-center gap-2">
-                      <Shield className="h-5 w-5 text-orange-500" />
-                      Permission Levels
-                    </CardTitle>
-                    <CardDescription className="text-slate-400">
-                      Manage user access levels and capabilities
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="border-slate-800 hover:bg-slate-800/50">
-                          <TableHead className="text-slate-400">Level</TableHead>
-                          <TableHead className="text-slate-400">Description</TableHead>
-                          <TableHead className="text-slate-400">Capabilities</TableHead>
-                          <TableHead className="text-slate-400 text-right">Users</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {([0, 1, 2, 3, 4] as PermissionLevel[]).map((level) => (
-                          <TableRow key={level} className="border-slate-800 hover:bg-slate-800/50">
-                            <TableCell>
-                              <Badge variant="outline" className="border-orange-500/30 text-orange-400">
-                                Level {level}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-slate-300">{PERMISSION_LABELS[level]}</TableCell>
-                            <TableCell>
-                              <div className="flex flex-wrap gap-1">
-                                {level >= 0 && <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">Read</Badge>}
-                                {level >= 1 && <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400">Write</Badge>}
-                                {level >= 2 && <Badge variant="outline" className="text-xs border-amber-500/30 text-amber-400">Export</Badge>}
-                                {level >= 3 && <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400">API</Badge>}
-                                {level >= 4 && <Badge variant="outline" className="text-xs border-rose-500/30 text-rose-400">Admin</Badge>}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right text-slate-400">
-                              {level === 0 && "8"}
-                              {level === 1 && "3"}
-                              {level === 2 && "2"}
-                              {level === 3 && "1"}
-                              {level === 4 && "1"}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Memory Section */}
-              {activeSection === "memory" && (
-                <Tabs defaultValue="user" className="space-y-4">
-                  <TabsList className="bg-slate-900 border border-slate-800">
-                    <TabsTrigger value="user" className="data-[state=active]:bg-slate-800">
-                      <User className="h-4 w-4 mr-2" />
-                      User Memory
-                    </TabsTrigger>
-                    <TabsTrigger value="company" className="data-[state=active]:bg-slate-800">
-                      <Building2 className="h-4 w-4 mr-2" />
-                      Company Memory
-                    </TabsTrigger>
-                    <TabsTrigger value="project" className="data-[state=active]:bg-slate-800">
-                      <FolderKanban className="h-4 w-4 mr-2" />
-                      Project Memory
-                    </TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="user">
-                    <MemoryViewer type="user" data={mockMemoryData.user} />
-                  </TabsContent>
-                  <TabsContent value="company">
-                    <MemoryViewer type="company" data={mockMemoryData.company} />
-                  </TabsContent>
-                  <TabsContent value="project">
-                    <MemoryViewer type="project" data={mockMemoryData.project} />
-                  </TabsContent>
-                </Tabs>
-              )}
-
-              {/* Logs Section */}
-              {activeSection === "logs" && (
-                <>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <Button variant="outline" size="sm" className="border-slate-700 text-slate-300">
-                        <Filter className="h-4 w-4 mr-2" />
-                        Filter
-                      </Button>
-                      <Button variant="outline" size="sm" className="border-slate-700 text-slate-300">
-                        <Clock className="h-4 w-4 mr-2" />
-                        Last 24h
-                      </Button>
-                    </div>
-                    <Button variant="outline" size="sm" className="border-slate-700 text-slate-300">
-                      <Download className="h-4 w-4 mr-2" />
-                      Export Logs
-                    </Button>
-                  </div>
-
-                  <Card className="bg-slate-900/50 border-slate-800">
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="border-slate-800 hover:bg-slate-800/50">
-                          <TableHead className="text-slate-400 w-32">Time</TableHead>
-                          <TableHead className="text-slate-400 w-24">Module</TableHead>
-                          <TableHead className="text-slate-400">Action</TableHead>
-                          <TableHead className="text-slate-400">Details</TableHead>
-                          <TableHead className="text-slate-400">User</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {mockLogs.map((log) => (
-                          <LogEntryRow key={log.id} log={log} />
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </Card>
-                </>
-              )}
-
-              {/* Settings Section */}
-              {activeSection === "settings" && (
-                <Card className="bg-slate-900/50 border-slate-800">
-                  <CardHeader>
-                    <CardTitle className="text-slate-200 flex items-center gap-2">
-                      <Settings className="h-5 w-5 text-orange-500" />
-                      System Settings
-                    </CardTitle>
-                    <CardDescription className="text-slate-400">
-                      Configure system-wide settings and preferences
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium text-slate-200">General</h4>
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 border border-slate-700">
-                            <span className="text-sm text-slate-300">Dark Mode</span>
-                            <Switch defaultChecked />
-                          </div>
-                          <div className="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 border border-slate-700">
-                            <span className="text-sm text-slate-300">Auto-save</span>
-                            <Switch defaultChecked />
-                          </div>
-                          <div className="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 border border-slate-700">
-                            <span className="text-sm text-slate-300">Notifications</span>
-                            <Switch defaultChecked />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium text-slate-200">Data Management</h4>
-                        <div className="space-y-3">
-                          <Button variant="outline" className="w-full justify-start border-slate-700 text-slate-300">
-                            <Download className="h-4 w-4 mr-2" />
-                            Export All Data
-                          </Button>
-                          <Button variant="outline" className="w-full justify-start border-slate-700 text-slate-300">
-                            <RefreshCw className="h-4 w-4 mr-2" />
-                            Sync with Cloud
-                          </Button>
-                          <Button variant="outline" className="w-full justify-start border-rose-500/30 text-rose-400 hover:bg-rose-500/10">
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Clear Cache
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Separator className="bg-slate-800" />
-
-                    <div className="flex items-center justify-between p-4 rounded-lg bg-orange-500/5 border border-orange-500/20">
-                      <div>
-                        <h4 className="text-sm font-medium text-orange-400">Admin Actions</h4>
-                        <p className="text-xs text-slate-500">Advanced operations requiring elevated permissions</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="outline" className="border-slate-700 text-slate-300">
-                          Reset to Defaults
-                        </Button>
-                        <Button size="sm" className="bg-orange-600 hover:bg-orange-700 text-white">
-                          Save Changes
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </motion.div>
-          </AnimatePresence>
-        </ScrollArea>
       </div>
 
-      {/* Right Panel - Quick Info */}
-      <motion.aside
-        initial={{ opacity: 0, x: 20 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.3 }}
-        className="w-72 border-l border-slate-800 flex flex-col bg-slate-950 hidden xl:flex"
+      {error ? (
+        <Card className="border-rose-500/30 bg-rose-500/10">
+          <CardContent className="flex items-start gap-3 p-4 text-rose-100">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <div>
+              <p className="font-medium">Admin overview failed to load</p>
+              <p className="text-sm text-rose-100/80">{error}</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as AdminTab)}
+        className="flex min-h-0 flex-1 flex-col gap-4"
       >
-        {/* Current User Info */}
-        <div className="p-4 border-b border-slate-800">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
-            <User className="h-4 w-4 text-slate-500" />
-            Current User
-          </h3>
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/50">
-              <div className="h-10 w-10 rounded-full bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center">
-                <span className="text-sm font-bold text-white">
-                  {(activeUser?.name || activeUser?.email || "AD")
-                    .split(" ")
-                    .map((part) => part[0])
-                    .join("")
-                    .slice(0, 2)
-                    .toUpperCase()}
-                </span>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-slate-200">
-                  {activeUser?.name || "No active profile"}
-                </p>
-                <p className="text-xs text-slate-500">
-                  {activeUser?.email || "Select a profile from the sidebar"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
+        <TabsList className="grid w-full grid-cols-3 bg-slate-950/80 lg:grid-cols-6">
+          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+          <TabsTrigger value="skills">Skills</TabsTrigger>
+          <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="permissions">Permissions</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
 
-        {/* Permission Level */}
-        <div className="p-4 border-b border-slate-800">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
-            <Shield className="h-4 w-4 text-slate-500" />
-            Permission Level
-          </h3>
-          <div className="p-4 rounded-lg bg-gradient-to-br from-orange-500/10 to-amber-500/10 border border-orange-500/20">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-lg font-bold text-orange-400">Level {permissionLevel}</span>
-              <Badge variant="outline" className="border-orange-500/30 text-orange-400">
-                Admin
-              </Badge>
-            </div>
-            <p className="text-xs text-slate-400">
-              {PERMISSION_LABELS[permissionLevel]}
-            </p>
+        <TabsContent value="dashboard" className="min-h-0 flex-1 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {(overview?.metrics || []).map((metric) => (
+              <MetricCard key={metric.id} metric={metric} />
+            ))}
           </div>
-        </div>
 
-        {/* System Health */}
-        <div className="p-4 border-b border-slate-800">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-slate-500" />
-            System Health
-          </h3>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between p-2 rounded bg-slate-800/30">
-              <span className="text-sm text-slate-400">API Status</span>
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-xs text-emerald-500">Operational</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-2 rounded bg-slate-800/30">
-              <span className="text-sm text-slate-400">Database</span>
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="text-xs text-emerald-500">Healthy</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-2 rounded bg-slate-800/30">
-              <span className="text-sm text-slate-400">Storage</span>
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-amber-500" />
-                <span className="text-xs text-amber-500">78% Used</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between p-2 rounded bg-slate-800/30">
-              <span className="text-sm text-slate-400">AI Models</span>
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="text-xs text-emerald-500">3 Active</span>
-              </div>
-            </div>
-          </div>
-        </div>
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Database className="h-5 w-5 text-orange-300" />
+                  System Health
+                </CardTitle>
+                <CardDescription>Database, storage, email, AI routing, and backup posture.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(overview?.health || []).map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3"
+                  >
+                    <div>
+                      <p className="text-sm font-medium text-white">{item.label}</p>
+                      <p className="text-xs text-slate-500">{item.value}</p>
+                    </div>
+                    <HealthBadge status={item.status} />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
 
-        {/* Quick Actions */}
-        <div className="flex-1 p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
-            <Zap className="h-4 w-4 text-slate-500" />
-            Quick Actions
-          </h3>
-          <div className="space-y-2">
-            <Button
-              variant="outline"
-              className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="sm"
-            >
-              <Bell className="h-4 w-4 mr-2 text-amber-500" />
-              View Alerts
-              <Badge variant="outline" className="ml-auto border-rose-500/30 text-rose-400">2</Badge>
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="sm"
-            >
-              <RefreshCw className="h-4 w-4 mr-2 text-blue-500" />
-              Sync All
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="sm"
-            >
-              <Download className="h-4 w-4 mr-2 text-emerald-500" />
-              Backup Data
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="sm"
-            >
-              <FileText className="h-4 w-4 mr-2 text-purple-500" />
-              View Reports
-            </Button>
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Shield className="h-5 w-5 text-sky-300" />
+                  Permission Coverage
+                </CardTitle>
+                <CardDescription>How many users sit at each execution tier.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(overview?.permissionSummary || []).map((entry) => (
+                  <div key={entry.level} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-white">Level {entry.level}</p>
+                        <p className="text-xs text-slate-500">{PERMISSION_LABELS[entry.level]}</p>
+                      </div>
+                      <Badge variant="outline" className="border-slate-700 text-slate-300">
+                        {entry.count} users
+                      </Badge>
+                    </div>
+                    <p className="mt-3 text-xs text-slate-400">
+                      {entry.capabilities.join(" • ") || "No capabilities"}
+                    </p>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           </div>
-        </div>
 
-        {/* Version Info */}
-        <div className="p-4 border-t border-slate-800">
-          <div className="text-center">
-            <p className="text-xs text-slate-500">Builder-FRG-LLC Platform</p>
-            <p className="text-xs text-slate-600">Version 2.0.0 • Admin Forge</p>
+          <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <AlertTriangle className="h-5 w-5 text-amber-300" />
+                  Active Alerts
+                </CardTitle>
+                <CardDescription>Operational gaps we still need to close before full production.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(overview?.alerts || []).length ? (
+                  overview?.alerts.map((alert) => (
+                    <div
+                      key={alert}
+                      className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+                    >
+                      {alert}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                    No active admin alerts right now.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Activity className="h-5 w-5 text-emerald-300" />
+                  Platform Snapshot
+                </CardTitle>
+                <CardDescription>Commercial and AI activity currently stored in the app.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-slate-300">
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Campaigns tracked</span>
+                  <span className="font-medium text-white">{overview?.counts.campaigns || 0}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Emails logged</span>
+                  <span className="font-medium text-white">{overview?.counts.emails || 0}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Conversations saved</span>
+                  <span className="font-medium text-white">{overview?.counts.conversations || 0}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Open support tickets</span>
+                  <span className="font-medium text-white">{overview?.counts.supportTickets || 0}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Open incidents</span>
+                  <span className="font-medium text-white">{overview?.counts.incidents || 0}</span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <span>Recent maintenance runs</span>
+                  <span className="font-medium text-white">{overview?.counts.maintenanceRuns || 0}</span>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Company memory</p>
+                  <p className="mt-2 font-medium text-white">{overview?.company?.name || "No company profile seeded"}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {(overview?.company?.specialties || []).join(" • ") || "Specialties not configured yet"}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
           </div>
-        </div>
-      </motion.aside>
+        </TabsContent>
+
+        <TabsContent value="skills" className="min-h-0 flex-1">
+          <ScrollArea className="h-[560px] rounded-3xl border border-slate-800 bg-slate-900/50 p-4">
+            <div className="space-y-3">
+              {(overview?.skills || []).map((skill) => (
+                <div
+                  key={skill.id}
+                  className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 p-4 lg:flex-row lg:items-center lg:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-white">{skill.displayName}</p>
+                      <Badge variant="outline" className="border-slate-700 text-slate-300">
+                        {skill.module}
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className={
+                          skill.enabled
+                            ? "border-emerald-500/30 text-emerald-300"
+                            : "border-rose-500/30 text-rose-300"
+                        }
+                      >
+                        {skill.enabled ? "Enabled" : "Disabled"}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-400">{skill.description || "No description"}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {pendingSkillId === skill.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                    ) : null}
+                    <Switch
+                      checked={skill.enabled}
+                      onCheckedChange={(checked) => void handleSkillToggle(skill, checked)}
+                      disabled={pendingSkillId === skill.id}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        <TabsContent value="tools" className="min-h-0 flex-1">
+          <ScrollArea className="h-[560px] rounded-3xl border border-slate-800 bg-slate-900/50 p-4">
+            <div className="space-y-3">
+              {(overview?.tools || []).map((tool) => (
+                <div key={tool.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium text-white">{tool.displayName}</p>
+                        <Badge variant="outline" className="border-slate-700 text-slate-300">
+                          {tool.name}
+                        </Badge>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-400">{tool.description || "No description"}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {pendingToolId === tool.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                      ) : null}
+                      <Switch
+                        checked={tool.enabled}
+                        onCheckedChange={(checked) => void handleToolPatch(tool, { enabled: checked })}
+                        disabled={pendingToolId === tool.id}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-[220px_1fr]">
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-wide text-slate-500">Required level</Label>
+                      <Select
+                        value={String(tool.requiredLevel)}
+                        onValueChange={(value) =>
+                          void handleToolPatch(tool, {
+                            requiredLevel: Number(value) as PermissionLevel,
+                          })
+                        }
+                        disabled={pendingToolId === tool.id}
+                      >
+                        <SelectTrigger className="border-slate-700 bg-slate-900 text-slate-100">
+                          <SelectValue placeholder="Choose level" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[0, 1, 2, 3, 4].map((level) => (
+                            <SelectItem key={level} value={String(level)}>
+                              Level {level}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Access policy</p>
+                      <p className="mt-2 text-sm text-slate-300">
+                        {PERMISSION_LABELS[tool.requiredLevel as PermissionLevel]}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        <TabsContent value="permissions" className="min-h-0 flex-1">
+          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <ScrollArea className="h-[560px] rounded-3xl border border-slate-800 bg-slate-900/50 p-4">
+              <div className="space-y-3">
+                {(overview?.users || []).map((user) => (
+                  <div key={user.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-white">{user.name || user.email}</p>
+                          <Badge variant="outline" className="border-slate-700 text-slate-300">
+                            {user.role}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-400">{user.email}</p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          Projects {user.stats.projects} • Learn {user.stats.learningItems} • Leads{" "}
+                          {user.stats.leads} • Campaigns {user.stats.campaigns} • Chats{" "}
+                          {user.stats.conversations}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {pendingUserId === user.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                        ) : null}
+                        <Select
+                          value={String(user.level)}
+                          onValueChange={(value) =>
+                            void handleUserLevelChange(user, Number(value) as PermissionLevel)
+                          }
+                          disabled={pendingUserId === user.id}
+                        >
+                          <SelectTrigger className="w-[220px] border-slate-700 bg-slate-900 text-slate-100">
+                            <SelectValue placeholder="Permission level" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {[0, 1, 2, 3, 4].map((level) => (
+                              <SelectItem key={level} value={String(level)}>
+                                Level {level}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Permission profile</p>
+                      <p className="mt-2 text-sm text-slate-300">
+                        {PERMISSION_LABELS[user.level as PermissionLevel]}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Shield className="h-5 w-5 text-orange-300" />
+                  Level Reference
+                </CardTitle>
+                <CardDescription>
+                  Use this to calibrate who can export, send, or hit live integrations.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(overview?.permissionSummary || []).map((entry) => (
+                  <div key={entry.level} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-white">Level {entry.level}</p>
+                      <Badge variant="outline" className="border-slate-700 text-slate-300">
+                        {entry.count}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-400">
+                      {entry.capabilities.join(" • ") || "No capabilities"}
+                    </p>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="logs" className="min-h-0 flex-1">
+          <Card className="border-slate-800 bg-slate-900/50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Activity className="h-5 w-5 text-sky-300" />
+                Activity Log
+              </CardTitle>
+              <CardDescription>
+                Audit trail for proposals, outreach, uploads, AI actions, and admin events.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Input
+                value={searchLogs}
+                onChange={(event) => setSearchLogs(event.target.value)}
+                placeholder="Search action, entity, user, skill, tool..."
+                className="border-slate-700 bg-slate-950 text-slate-100"
+              />
+              <ScrollArea className="h-[460px] rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                <div className="space-y-3">
+                  {filteredLogs.map((log) => (
+                    <div key={log.id} className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className="border-slate-700 text-slate-300">
+                              {log.action}
+                            </Badge>
+                            <Badge variant="outline" className="border-slate-700 text-slate-300">
+                              {log.entity}
+                            </Badge>
+                            {log.skill ? (
+                              <Badge variant="outline" className="border-sky-500/30 text-sky-300">
+                                {log.skill}
+                              </Badge>
+                            ) : null}
+                            {log.tool ? (
+                              <Badge
+                                variant="outline"
+                                className="border-orange-500/30 text-orange-300"
+                              >
+                                {log.tool}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="mt-2 text-sm text-white">
+                            {log.userName || log.userEmail || "System event"}
+                          </p>
+                          <p className="text-xs text-slate-500">{formatDateTime(log.createdAt)}</p>
+                        </div>
+                      </div>
+                      {log.details ? (
+                        <pre className="mt-3 overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400">
+                          {JSON.stringify(log.details, null, 2)}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ))}
+                  {!filteredLogs.length ? (
+                    <div className="rounded-2xl border border-dashed border-slate-700 px-4 py-10 text-center text-sm text-slate-500">
+                      No logs match this filter.
+                    </div>
+                  ) : null}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="settings" className="min-h-0 flex-1">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Settings className="h-5 w-5 text-violet-300" />
+                  Runtime Settings
+                </CardTitle>
+                <CardDescription>
+                  Current deploy-sensitive configuration as seen by the app.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-slate-300">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Email provider</p>
+                  <p className="mt-2 font-medium text-white">
+                    {overview?.settings.email.provider || "log"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    From: {overview?.settings.email.from || "Not configured"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Reply-To: {overview?.settings.email.replyTo || "Not configured"}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Storage</p>
+                  <p className="mt-2 font-medium text-white">
+                    {overview?.settings.storage.label || "Unknown"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Driver: {overview?.settings.storage.driver || "local"}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Latest backup</p>
+                  <p className="mt-2 font-medium text-white">
+                    {overview?.settings.latestBackup
+                      ? formatDateTime(overview.settings.latestBackup.createdAt)
+                      : "No backup snapshot yet"}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {overview?.settings.latestBackup?.path ||
+                      "Run the backup action to create a snapshot."}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-800 bg-slate-900/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <Bot className="h-5 w-5 text-emerald-300" />
+                  AI Provider Routing
+                </CardTitle>
+                <CardDescription>
+                  OpenAI is primary, but the panel shows readiness for every provider.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {Object.entries(overview?.settings.aiProviders.providers || {}).map(
+                  ([key, provider]) => (
+                    <div key={key} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-white">{provider.label}</p>
+                          <p className="text-xs text-slate-500">{provider.model}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {overview?.settings.aiProviders.primary === key ? (
+                            <Badge variant="outline" className="border-orange-500/30 text-orange-300">
+                              Primary
+                            </Badge>
+                          ) : null}
+                          <Badge
+                            variant="outline"
+                            className={
+                              provider.enabled
+                                ? "border-emerald-500/30 text-emerald-300"
+                                : "border-slate-700 text-slate-300"
+                            }
+                          >
+                            {provider.enabled ? "Enabled" : "Disabled"}
+                          </Badge>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">
+                        API key {provider.hasApiKey ? "detected" : "missing"}
+                      </p>
+                    </div>
+                  )
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

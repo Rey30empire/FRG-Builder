@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeEstimate } from "@/lib/api-serializers";
+import { canAccessEstimate } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { stringifyJson } from "@/lib/json";
 import { buildProposalData, getProposalContext } from "@/lib/proposals";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const estimateId = searchParams.get("estimateId");
 
@@ -13,6 +18,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Estimate ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessEstimate(auth.user, estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -40,6 +52,9 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
     const { estimateId, proposalData, status } = body;
 
@@ -47,6 +62,13 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Estimate ID and proposal data are required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessEstimate(auth.user, estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
       );
     }
 

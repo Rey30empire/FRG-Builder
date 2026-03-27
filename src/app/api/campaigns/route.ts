@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { logActivity } from "@/lib/activity-log";
 import { serializeCampaign } from "@/lib/api-serializers";
+import { canAccessCampaign, resolveScopedUserId } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { DEFAULT_USER_ID, ensureDefaultUser } from "@/lib/default-user";
 import { stringifyJson } from "@/lib/json";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get("userId") || DEFAULT_USER_ID;
+    const userId = resolveScopedUserId(auth.user, searchParams.get("userId"));
 
     const campaigns = await db.campaign.findMany({
       where: { userId },
@@ -29,8 +34,23 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { name, type, target, content, status, sent, opened, clicked, converted, userId } = body;
+    const {
+      name,
+      type,
+      target,
+      content,
+      status,
+      sent,
+      opened,
+      clicked,
+      converted,
+      budget,
+      scheduledAt,
+    } = body;
 
     if (!name || !type) {
       return NextResponse.json(
@@ -39,23 +59,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!userId) {
-      await ensureDefaultUser();
-    }
-
     const campaign = await db.campaign.create({
       data: {
-        userId: userId || DEFAULT_USER_ID,
+        userId: auth.user.id,
         name,
         type,
         target,
         content: stringifyJson(content),
         status: status || "draft",
+        budget: budget ? Number(budget) : undefined,
+        scheduledAt: scheduledAt ? new Date(scheduledAt) : undefined,
+        launchedAt: status === "active" ? new Date() : undefined,
+        completedAt: status === "completed" ? new Date() : undefined,
         sent,
         opened,
         clicked,
         converted,
       },
+    });
+
+    await logActivity({
+      userId: auth.user.id,
+      action: "create",
+      entity: "campaign",
+      entityId: campaign.id,
+      details: {
+        status: campaign.status,
+        type: campaign.type,
+        target: campaign.target,
+        budget: campaign.budget,
+      },
+      tool: "campaign-route",
     });
 
     return NextResponse.json({
@@ -73,8 +107,11 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id, ...updates } = body;
+    const { id, userId: _userId, ...updates } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -83,12 +120,71 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const campaignAccess = await canAccessCampaign(auth.user, id);
+    if (!campaignAccess) {
+      return NextResponse.json(
+        { success: false, error: "Campaign not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    const existingCampaign = await db.campaign.findUnique({
+      where: { id },
+    });
+
+    if (!existingCampaign) {
+      return NextResponse.json(
+        { success: false, error: "Campaign not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (updates.budget !== undefined && updates.budget !== null) {
+      updates.budget = Number(updates.budget);
+    }
+    if (updates.scheduledAt) {
+      updates.scheduledAt = new Date(updates.scheduledAt);
+    }
+    if (updates.scheduledAt === null) {
+      updates.scheduledAt = null;
+    }
+
+    const nextStatus = updates.status || existingCampaign.status;
+
     const campaign = await db.campaign.update({
       where: { id },
       data: {
         ...updates,
         content: updates.content === undefined ? undefined : stringifyJson(updates.content),
+        launchedAt:
+          nextStatus === "active"
+            ? existingCampaign.launchedAt || new Date()
+            : updates.status === "paused"
+              ? existingCampaign.launchedAt
+              : updates.status === "draft"
+                ? null
+                : undefined,
+        completedAt:
+          nextStatus === "completed"
+            ? existingCampaign.completedAt || new Date()
+            : updates.status && updates.status !== "completed"
+              ? null
+              : undefined,
       },
+    });
+
+    await logActivity({
+      userId: auth.user.id,
+      action: "update",
+      entity: "campaign",
+      entityId: campaign.id,
+      details: {
+        status: campaign.status,
+        type: campaign.type,
+        target: campaign.target,
+        budget: campaign.budget,
+      },
+      tool: "campaign-route",
     });
 
     return NextResponse.json({
@@ -106,6 +202,9 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 
@@ -113,6 +212,14 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Campaign ID is required" },
         { status: 400 }
+      );
+    }
+
+    const campaignAccess = await canAccessCampaign(auth.user, id);
+    if (!campaignAccess) {
+      return NextResponse.json(
+        { success: false, error: "Campaign not found or access denied" },
+        { status: 404 }
       );
     }
 

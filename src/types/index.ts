@@ -105,7 +105,12 @@ export type ToolName =
   | "schedule_post"
   | "read_folders"
   | "export_reports"
-  | "compare_versions";
+  | "compare_versions"
+  | "create_estimate_draft"
+  | "generate_follow_up"
+  | "summarize_documents"
+  | "explain_takeoff"
+  | "run_project_orchestrator";
 
 export interface Tool {
   id: string;
@@ -121,6 +126,109 @@ export interface Tool {
 // PROJECTS
 // ============================================
 
+export type BidOpportunityStatus =
+  | "undecided"
+  | "accepted"
+  | "submitted"
+  | "won"
+  | "archived";
+
+export type BidSubmitPackageStatus = "draft" | "review" | "ready" | "submitted" | "won";
+
+export interface BidFormLineItem {
+  id: string;
+  label: string;
+  amount: number;
+  notes?: string;
+}
+
+export interface BidFormData {
+  bidderCompany: string;
+  bidderContact?: string;
+  bidderEmail?: string;
+  bidderPhone?: string;
+  projectName: string;
+  projectAddress?: string;
+  scopePackage?: string;
+  instructions?: string;
+  lineItems: BidFormLineItem[];
+  alternates: string[];
+  inclusions: string[];
+  exclusions: string[];
+  attachments: string[];
+  notes?: string;
+  ready: boolean;
+  lastAutoFilledAt?: string;
+}
+
+export interface BidPackageChecklistItem {
+  key: string;
+  label: string;
+  done: boolean;
+  detail?: string;
+}
+
+export interface BidSubmitPackage {
+  status: BidSubmitPackageStatus;
+  submitMethod: "email" | "portal" | "manual";
+  submitTo?: string;
+  packageSummary: string;
+  checklist: BidPackageChecklistItem[];
+  proposalPdfUrl?: string;
+  bidFormPdfUrl?: string;
+  publicPdfUrl?: string;
+  packageItems: string[];
+  readyForSubmit: boolean;
+  notes?: string;
+  preparedAt?: string;
+  submittedAt?: string;
+}
+
+export interface BidOpportunityProjectLink {
+  id: string;
+  name: string;
+  status: Project["status"];
+  address?: string;
+  client?: string;
+  updatedAt: Date | string;
+  documentsCount?: number;
+  estimatesCount?: number;
+}
+
+export interface BidOpportunity {
+  id: string;
+  userId: string;
+  projectId?: string | null;
+  linkedProject?: BidOpportunityProjectLink | null;
+  name: string;
+  client?: string;
+  clientEmail?: string;
+  clientPhone?: string;
+  estimatorContact?: string;
+  dueDate?: Date | string | null;
+  jobWalkDate?: Date | string | null;
+  rfiDueDate?: Date | string | null;
+  projectSize?: string;
+  location?: string;
+  address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  scopePackage?: string;
+  description?: string;
+  tradeInstructions?: string;
+  bidFormRequired: boolean;
+  bidFormInstructions?: string;
+  bidFormData?: BidFormData | null;
+  submitPackage?: BidSubmitPackage | null;
+  source?: string;
+  externalUrl?: string;
+  status: BidOpportunityStatus;
+  notes?: string;
+  submittedAt?: Date | string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -133,6 +241,7 @@ export interface Project {
   status: "active" | "completed" | "archived";
   documents: Document[];
   estimates: Estimate[];
+  bidOpportunity?: BidOpportunity | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -150,6 +259,11 @@ export interface Document {
   pageNumber?: number;
   analyzed: boolean;
   analysisResult?: DocumentAnalysis | null;
+  relevanceScore?: number | null;
+  selectedForTakeoff: boolean;
+  selectedForProposalContext: boolean;
+  requiresHumanReview: boolean;
+  selectionReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -169,9 +283,12 @@ export interface Estimate {
   total?: number;
   takeoffItems: TakeoffItem[];
   proposalData?: ProposalData | null;
+  proposalDelivery?: ProposalDelivery | null;
   duration?: number;
   weatherFactor?: number;
+  marketFactor?: number;
   riskFactor?: number;
+  regionalContext?: EstimateRegionalContext | null;
   sentAt?: Date;
   viewedAt?: Date;
   approvedAt?: Date;
@@ -218,6 +335,12 @@ export interface DocumentAnalysis {
   confidence: number;
   trade: string;
   category: string;
+  relevanceScore: number;
+  selectedForTakeoff: boolean;
+  selectedForProposalContext: boolean;
+  requiresHumanReview: boolean;
+  selectionReason: string;
+  matchedScopeTerms: string[];
   summary: string;
   pageCount: number;
   extractedTextLength: number;
@@ -254,6 +377,135 @@ export interface Message {
   createdAt: Date;
 }
 
+export type AiProviderName = "openai" | "anthropic" | "gemini";
+
+export type BillingPlanKey = "starter" | "pro" | "growth";
+
+export type BillingMetricKey =
+  | "ai_messages"
+  | "document_analyses"
+  | "proposal_deliveries"
+  | "agent_runs"
+  | "custom_agents";
+
+export type BillingStatus =
+  | "free"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "incomplete";
+
+export type BillingInterval = "monthly" | "yearly";
+
+export type AgentSafeAction =
+  | "create_estimate_draft"
+  | "generate_follow_up"
+  | "summarize_documents"
+  | "explain_takeoff"
+  | "run_project_orchestrator";
+
+export interface AiProviderConfig {
+  enabled: boolean;
+  model: string;
+}
+
+export interface AiProviderSettings {
+  primary: AiProviderName;
+  providers: Record<AiProviderName, AiProviderConfig>;
+}
+
+export interface AiProviderStatus extends AiProviderConfig {
+  hasApiKey: boolean;
+  hasPersonalKey: boolean;
+  hasSystemKey: boolean;
+  keySource: "user" | "system" | "none";
+  validationStatus: "valid" | "invalid" | "pending" | "missing";
+  keyHint?: string | null;
+  lastValidatedAt?: string | null;
+  lastValidationError?: string | null;
+  label: string;
+}
+
+export interface AiProviderSettingsResponse {
+  primary: AiProviderName;
+  active: AiProviderName | null;
+  providers: Record<AiProviderName, AiProviderStatus>;
+}
+
+export interface BillingPlanDefinition {
+  key: BillingPlanKey;
+  label: string;
+  description: string;
+  badge: string;
+  intervalPrices: Record<BillingInterval, number>;
+  limits: Record<BillingMetricKey, number | null>;
+  features: {
+    personalApiKeys: boolean;
+    customAgents: boolean;
+    pipelineAutomation: boolean;
+    whiteLabelProposal: boolean;
+    prioritySupport: boolean;
+  };
+}
+
+export interface BillingUsageSnapshot {
+  metric: BillingMetricKey;
+  label: string;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+  percentUsed: number | null;
+}
+
+export interface BillingAccount {
+  id: string;
+  userId: string;
+  planKey: BillingPlanKey;
+  status: BillingStatus;
+  billingInterval?: BillingInterval | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  stripePriceId?: string | null;
+  stripeCheckoutSessionId?: string | null;
+  currency?: string | null;
+  amountCents?: number | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodStart?: Date | null;
+  currentPeriodEnd?: Date | null;
+  trialEndsAt?: Date | null;
+  checkoutCompletedAt?: Date | null;
+  portalAccessedAt?: Date | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface BillingUsageEvent {
+  id: string;
+  billingAccountId: string;
+  userId: string;
+  metricKey: BillingMetricKey;
+  quantity: number;
+  source: string;
+  referenceId?: string | null;
+  referenceType?: string | null;
+  periodKey: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+}
+
+export interface BillingOverview {
+  account: BillingAccount;
+  plan: BillingPlanDefinition;
+  availablePlans: BillingPlanDefinition[];
+  usage: BillingUsageSnapshot[];
+  checkoutReady: boolean;
+  portalReady: boolean;
+  stripeConfigured: boolean;
+  recommendedUpgrade?: BillingPlanKey | null;
+}
+
 // ============================================
 // LEARNING
 // ============================================
@@ -266,9 +518,12 @@ export interface LearningItem {
   level: "beginner" | "intermediate" | "advanced";
   type: "lesson" | "exercise" | "exam";
   completed: boolean;
+  progress: number;
+  bookmarked: boolean;
   score?: number;
   timeSpent?: number;
-  content?: Record<string, unknown>;
+  lastStudiedAt?: Date;
+  content?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -286,6 +541,10 @@ export interface Lead {
   company?: string;
   source?: string;
   status: "new" | "contacted" | "qualified" | "proposal" | "closed";
+  priority: "low" | "medium" | "high";
+  estimatedValue?: number;
+  lastContactAt?: Date;
+  expectedCloseDate?: Date;
   interactions?: Record<string, unknown>[];
   nextFollowUp?: Date;
   notes?: string;
@@ -300,7 +559,11 @@ export interface Campaign {
   name: string;
   type: "email" | "social" | "ads";
   target?: string;
-  status: "draft" | "active" | "completed";
+  status: "draft" | "scheduled" | "active" | "paused" | "completed";
+  budget?: number;
+  scheduledAt?: Date;
+  launchedAt?: Date;
+  completedAt?: Date;
   content?: Record<string, unknown>;
   sent?: number;
   opened?: number;
@@ -326,10 +589,126 @@ export interface Email {
   updatedAt: Date;
 }
 
+export interface SupportTicket {
+  id: string;
+  userId?: string | null;
+  title: string;
+  description: string;
+  status: "open" | "investigating" | "waiting" | "resolved";
+  priority: "low" | "medium" | "high" | "urgent";
+  channel: "internal" | "email" | "phone";
+  tags?: string[];
+  resolutionNotes?: string | null;
+  lastResponseAt?: Date | null;
+  resolvedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface OpsIncident {
+  id: string;
+  title: string;
+  summary: string;
+  affectedService?: string | null;
+  severity: "info" | "warning" | "critical";
+  status: "open" | "investigating" | "monitoring" | "resolved";
+  source?: string | null;
+  details?: Record<string, unknown> | null;
+  startedAt: Date;
+  resolvedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface MaintenanceRun {
+  id: string;
+  action: string;
+  trigger: "manual" | "cron";
+  status: "completed" | "failed" | "skipped";
+  summary?: string | null;
+  details?: Record<string, unknown> | null;
+  startedAt: Date;
+  finishedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface ProposalLineItemSummary {
   trade: string;
   description: string;
   totalCost: number;
+}
+
+export interface EstimateRegionalContext {
+  source: "heuristic" | "hybrid-live";
+  address?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  metro?: string;
+  pricingRegion: string;
+  marketTier: "low" | "standard" | "elevated" | "premium";
+  timezone: string;
+  climateZone: string;
+  season: "winter" | "spring" | "summer" | "fall";
+  latitude?: number | null;
+  longitude?: number | null;
+  coordinateSource: "opportunity" | "city-centroid" | "state-centroid" | "open-meteo" | "none";
+  geocodingProvider?: "open-meteo" | "heuristic";
+  weatherProvider?: "open-meteo" | "heuristic";
+  marketDataProvider?: "fred" | "heuristic";
+  locationSummary: string;
+  weatherSummary: string;
+  weatherFactor: number;
+  marketFactor: number;
+  logisticsFactor: number;
+  scheduleRiskFactor: number;
+  laborIndex: number;
+  materialIndex: number;
+  equipmentIndex: number;
+  drivers: string[];
+  liveDataNotes?: string[];
+  weatherSnapshot?: {
+    date?: string;
+    temperatureMaxC?: number;
+    temperatureMinC?: number;
+    precipitationMm?: number;
+    windSpeedMaxKph?: number;
+  } | null;
+  marketSeries?: {
+    labor?: {
+      provider: "fred";
+      seriesId: string;
+      date?: string;
+      value: number;
+      baseline: number;
+      multiplier: number;
+    };
+    material?: {
+      provider: "fred";
+      seriesId: string;
+      date?: string;
+      value: number;
+      baseline: number;
+      multiplier: number;
+    };
+    equipment?: {
+      provider: "fred";
+      seriesId: string;
+      date?: string;
+      value: number;
+      baseline: number;
+      multiplier: number;
+    };
+  } | null;
+  tradeAdjustments: Record<
+    string,
+    {
+      labor: number;
+      material: number;
+      equipment: number;
+    }
+  >;
 }
 
 export interface ProposalData {
@@ -347,13 +726,140 @@ export interface ProposalData {
   highlights: ProposalLineItemSummary[];
 }
 
+export interface ProposalDelivery {
+  id: string;
+  estimateId: string;
+  recipientName?: string | null;
+  recipientEmail?: string | null;
+  senderMessage?: string | null;
+  responseMessage?: string | null;
+  status: "draft" | "sent" | "viewed" | "approved" | "rejected";
+  provider?: string | null;
+  providerMessageId?: string | null;
+  sentAt?: Date | null;
+  viewedAt?: Date | null;
+  approvedAt?: Date | null;
+  rejectedAt?: Date | null;
+  viewCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface EmailMetadata {
   attachmentLabel?: string;
   attachmentUrl?: string;
+  bidFormPdfUrl?: string;
+  portalUrl?: string;
+  publicPdfUrl?: string;
   cta?: string;
   template?: string;
   generatedBy?: string;
   proposalStatus?: string;
+  provider?: string;
+  providerMessageId?: string;
+}
+
+export type AgentWorkspaceMode = "manual" | "assisted" | "agentic";
+
+export type CustomAgentExecutionMode = "chat" | "pipeline" | "both";
+
+export type CustomAgentPipelineStage =
+  | "preflight"
+  | "takeoff"
+  | "estimate"
+  | "delivery"
+  | "followup";
+
+export type AgentPipelineAgentKey =
+  | "documentControl"
+  | "scopeSelector"
+  | "takeoff"
+  | "estimator"
+  | "proposalWriter"
+  | "bidForm"
+  | "followUp";
+
+export interface AgentWorkspaceProfile {
+  enabled: boolean;
+  reviewRequired?: boolean;
+  requiredLevel?: PermissionLevel;
+  allowedTools?: ToolName[];
+}
+
+export interface UserAgentWorkspaceConfig {
+  mode: AgentWorkspaceMode;
+  autoRunOnChat: boolean;
+  requireReviewBeforeSend: boolean;
+  agents: Record<AgentPipelineAgentKey, AgentWorkspaceProfile>;
+}
+
+export interface CustomAgent {
+  id: string;
+  userId: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  instructions: string;
+  baseSkill: SkillName;
+  enabled: boolean;
+  autoRun: boolean;
+  includeProjectContext: boolean;
+  includeDocumentSummary: boolean;
+  includeEstimateSnapshot: boolean;
+  executionMode: CustomAgentExecutionMode;
+  pipelineStage?: CustomAgentPipelineStage | null;
+  requiredLevel: PermissionLevel;
+  reviewRequired: boolean;
+  allowedTools: ToolName[];
+  triggerPhrases: string[];
+  successCriteria?: string | null;
+  outputSchema?: string | null;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AgentRunStep {
+  id: string;
+  runId: string;
+  agentKey: string;
+  agentLabel: string;
+  status: "completed" | "skipped" | "failed";
+  tool?: ToolName | null;
+  skill?: SkillName | null;
+  summary?: string | null;
+  details?: Record<string, unknown> | null;
+  startedAt: Date;
+  finishedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface AgentRun {
+  id: string;
+  userId: string;
+  projectId?: string | null;
+  conversationId?: string | null;
+  trigger: "chat" | "quick-action" | "auto-chat";
+  mode: AgentWorkspaceMode;
+  status: "running" | "completed" | "failed";
+  prompt?: string | null;
+  summary?: string | null;
+  output?: string | null;
+  steps: AgentRunStep[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface UserSenderSettings {
+  fromName?: string;
+  fromAddress?: string;
+  replyTo?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  hasSmtpPassword?: boolean;
 }
 
 // ============================================
@@ -369,6 +875,16 @@ export interface UserMemory {
   preferredMargins?: number;
   laborRates?: Record<string, number>;
   overheadPercent?: number;
+  emailFromName?: string;
+  emailFromAddress?: string;
+  emailReplyTo?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUser?: string;
+  hasSmtpPassword?: boolean;
+  aiProviderConfig?: AiProviderSettings | null;
+  agentWorkspaceConfig?: UserAgentWorkspaceConfig | null;
   topicsStudied?: string[];
   frequentErrors?: string[];
   progressByArea?: Record<string, number>;
@@ -398,6 +914,7 @@ export interface CompanyMemory {
   logo?: string;
   primaryColor?: string;
   proposalTemplate?: string;
+  aiProviderConfig?: AiProviderSettings | null;
   createdAt: Date;
   updatedAt: Date;
 }

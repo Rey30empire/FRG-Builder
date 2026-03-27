@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
-import { mkdir, unlink, writeFile } from "fs/promises";
-import path from "path";
 import { serializeDocument } from "@/lib/api-serializers";
+import { canAccessDocument, canAccessProject } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { stringifyJson } from "@/lib/json";
+import { deleteStoredFile, storeDocumentUpload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
-function sanitizeFileName(name: string) {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get("projectId");
 
@@ -25,6 +20,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Project ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -48,6 +50,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const formData = await request.formData();
     const file = formData.get("file") as File;
     const projectId = formData.get("projectId") as string;
@@ -61,18 +66,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const uploadDirectory = path.join(process.cwd(), "public", "uploads", "documents");
-    await mkdir(uploadDirectory, { recursive: true });
-
-    const extension = path.extname(file.name);
-    const originalBaseName = path.basename(file.name, extension);
-    const safeName = sanitizeFileName(originalBaseName || "document");
-    const fileName = `${Date.now()}-${randomUUID().slice(0, 8)}-${safeName}${extension.toLowerCase()}`;
-    const absolutePath = path.join(uploadDirectory, fileName);
-    const publicPath = `/uploads/documents/${fileName}`;
+    if (!(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(absolutePath, buffer);
+    const storedFile = await storeDocumentUpload({
+      originalName: file.name,
+      buffer,
+      contentType: file.type,
+    });
 
     const document = await db.document.create({
       data: {
@@ -80,7 +86,7 @@ export async function POST(request: NextRequest) {
         name: file.name,
         originalName: file.name,
         type: file.type,
-        path: publicPath,
+        path: storedFile.path,
         size: file.size,
         trade,
         category,
@@ -103,13 +109,35 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id, analyzed, analysisResult, trade, category, pageNumber } = body;
+    const {
+      id,
+      analyzed,
+      analysisResult,
+      trade,
+      category,
+      pageNumber,
+      relevanceScore,
+      selectedForTakeoff,
+      selectedForProposalContext,
+      requiresHumanReview,
+      selectionReason,
+    } = body;
 
     if (!id) {
       return NextResponse.json(
         { success: false, error: "Document ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessDocument(auth.user, id))) {
+      return NextResponse.json(
+        { success: false, error: "Document not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -126,6 +154,11 @@ export async function PUT(request: NextRequest) {
         trade,
         category,
         pageNumber,
+        relevanceScore,
+        selectedForTakeoff,
+        selectedForProposalContext,
+        requiresHumanReview,
+        selectionReason,
       },
     });
 
@@ -144,6 +177,9 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 
@@ -151,6 +187,13 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Document ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessDocument(auth.user, id))) {
+      return NextResponse.json(
+        { success: false, error: "Document not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -166,11 +209,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     await db.document.delete({ where: { id } });
-
-    if (document.path.startsWith("/uploads/documents/")) {
-      const diskPath = path.join(process.cwd(), "public", document.path.replace(/^\/+/, ""));
-      await unlink(diskPath).catch(() => undefined);
-    }
+    await deleteStoredFile(document.path).catch(() => undefined);
 
     return NextResponse.json({
       success: true,

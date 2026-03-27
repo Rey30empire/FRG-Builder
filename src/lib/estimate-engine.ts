@@ -1,6 +1,13 @@
 import { db } from "@/lib/db";
-import { analyzeStoredDocument, type DocumentAnalysis, type TakeoffSeed } from "@/lib/document-analysis";
+import {
+  analyzeStoredDocument,
+  buildDocumentAnalysisContext,
+  type DocumentAnalysis,
+  type DocumentAnalysisContext,
+  type TakeoffSeed,
+} from "@/lib/document-analysis";
 import { parseJsonField } from "@/lib/json";
+import { resolveRegionalContextLive } from "@/lib/location-intelligence";
 
 type TradeRate = {
   laborRate: number;
@@ -23,6 +30,7 @@ type EstimateGenerationContext = {
   overheadPercent: number;
   profitPercent: number;
   rateLibrary: RateLibrary;
+  companyWorkZones: string[];
 };
 
 const DEFAULT_RATE_LIBRARY: RateLibrary = {
@@ -142,6 +150,7 @@ async function loadEstimateGenerationContext(userId: string): Promise<EstimateGe
     userId,
     overheadPercent: user?.userMemory?.overheadPercent ?? 10,
     profitPercent: user?.userMemory?.preferredMargins ?? 15,
+    companyWorkZones: parseJsonField<string[]>(company?.workZones, []),
     rateLibrary: {
       defaultCrewSize: companyRates.defaultCrewSize || DEFAULT_RATE_LIBRARY.defaultCrewSize,
       hoursPerDay: companyRates.hoursPerDay || DEFAULT_RATE_LIBRARY.hoursPerDay,
@@ -164,7 +173,7 @@ function normalizeTakeoffSeed(seed: TakeoffSeed, fallbackDocumentName: string) {
   };
 }
 
-async function ensureAnalyzedDocuments(projectId: string) {
+async function ensureAnalyzedDocuments(projectId: string, context?: DocumentAnalysisContext) {
   const documents = await db.document.findMany({
     where: { projectId },
     orderBy: { createdAt: "asc" },
@@ -178,7 +187,7 @@ async function ensureAnalyzedDocuments(projectId: string) {
       continue;
     }
 
-    const analyzed = await analyzeStoredDocument(document);
+    const analyzed = await analyzeStoredDocument(document, context);
 
     const updated = await db.document.update({
       where: { id: document.id },
@@ -187,6 +196,11 @@ async function ensureAnalyzedDocuments(projectId: string) {
         trade: analyzed.trade,
         category: analyzed.category,
         pageNumber: analyzed.pageNumber,
+        relevanceScore: analyzed.relevanceScore,
+        selectedForTakeoff: analyzed.selectedForTakeoff,
+        selectedForProposalContext: analyzed.selectedForProposalContext,
+        requiresHumanReview: analyzed.requiresHumanReview,
+        selectionReason: analyzed.selectionReason,
         analysisResult: JSON.stringify(analyzed.analysisResult),
       },
     });
@@ -195,15 +209,6 @@ async function ensureAnalyzedDocuments(projectId: string) {
   }
 
   return analyzedDocuments;
-}
-
-function inferWeatherFactor(trades: string[]) {
-  const normalizedTrades = trades.map((trade) => trade.toLowerCase());
-  const exposedTrade = normalizedTrades.some((trade) =>
-    ["concrete", "civil", "roofing", "painting"].includes(trade)
-  );
-
-  return exposedTrade ? 1.03 : 1;
 }
 
 function inferRiskFactor(documentAnalyses: DocumentAnalysis[]) {
@@ -219,6 +224,8 @@ export async function generateEstimateForProject(projectId: string, userId?: str
   const project = await db.project.findUnique({
     where: { id: projectId },
     include: {
+      bidOpportunity: true,
+      projectMemory: true,
       documents: true,
       estimates: {
         orderBy: { version: "desc" },
@@ -232,20 +239,31 @@ export async function generateEstimateForProject(projectId: string, userId?: str
   }
 
   const effectiveUserId = userId || project.userId;
+  const documentContext = buildDocumentAnalysisContext(project);
   const [context, documents] = await Promise.all([
     loadEstimateGenerationContext(effectiveUserId),
-    ensureAnalyzedDocuments(projectId),
+    ensureAnalyzedDocuments(projectId, documentContext),
   ]);
 
   if (documents.length === 0) {
     throw new Error("Upload at least one document before generating an estimate");
   }
 
-  const documentAnalyses = documents
+  const estimateSourceDocuments =
+    documents
+      .filter((document) => document.selectedForTakeoff)
+      .sort(
+        (a, b) =>
+          Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0) ||
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      ) || [];
+  const prioritizedDocuments = estimateSourceDocuments.length > 0 ? estimateSourceDocuments : documents;
+
+  const documentAnalyses = prioritizedDocuments
     .map((document) => parseJsonField<DocumentAnalysis | null>(document.analysisResult, null))
     .filter((analysis): analysis is DocumentAnalysis => Boolean(analysis));
 
-  const takeoffSeeds = documents.flatMap((document) => {
+  const takeoffSeeds = prioritizedDocuments.flatMap((document) => {
     const analysis = parseJsonField<DocumentAnalysis | null>(document.analysisResult, null);
 
     if (analysis?.takeoffItems?.length) {
@@ -268,12 +286,28 @@ export async function generateEstimateForProject(projectId: string, userId?: str
     ];
   });
 
+  const regionalContext = await resolveRegionalContextLive({
+    address: project.bidOpportunity?.address || project.address,
+    location: project.bidOpportunity?.location,
+    latitude: project.bidOpportunity?.latitude,
+    longitude: project.bidOpportunity?.longitude,
+    dueDate: project.bidOpportunity?.dueDate || project.deadline,
+    trades: takeoffSeeds.map((seed) => seed.trade),
+    companyWorkZones: context.companyWorkZones,
+  });
+
   const directCosts = takeoffSeeds.map((seed) => {
     const rate = pickTradeRate(context.rateLibrary, seed.rateKey);
+    const tradeKey = normalizeTradeKey(seed.trade || seed.rateKey);
+    const regionalTrade = regionalContext.tradeAdjustments[tradeKey] || {
+      labor: regionalContext.laborIndex,
+      material: regionalContext.materialIndex,
+      equipment: regionalContext.equipmentIndex,
+    };
     const quantity = Number(seed.quantity) || 1;
-    const materialCost = Number((quantity * rate.materialRate).toFixed(2));
+    const materialCost = Number((quantity * rate.materialRate * regionalTrade.material).toFixed(2));
     const laborHours = quantity * rate.laborHoursPerUnit;
-    const laborCost = Number((laborHours * rate.laborRate).toFixed(2));
+    const laborCost = Number((laborHours * rate.laborRate * regionalTrade.labor).toFixed(2));
     const totalCost = Number((materialCost + laborCost).toFixed(2));
 
     return {
@@ -287,7 +321,10 @@ export async function generateEstimateForProject(projectId: string, userId?: str
       sourcePage: seed.sourcePage,
       sourceDocument: seed.sourceDocument,
       laborHours,
-      equipmentFactor: rate.equipmentFactor ?? context.rateLibrary.defaultEquipmentFactor,
+      equipmentFactor:
+        (rate.equipmentFactor ?? context.rateLibrary.defaultEquipmentFactor) *
+        regionalTrade.equipment *
+        regionalContext.logisticsFactor,
       crewSize: rate.crewSize || context.rateLibrary.defaultCrewSize,
     };
   });
@@ -302,8 +339,11 @@ export async function generateEstimateForProject(projectId: string, userId?: str
       .toFixed(2)
   );
   const subtotal = Number((materialsCost + laborCost + equipmentCost).toFixed(2));
-  const weatherFactor = inferWeatherFactor(directCosts.map((item) => item.trade));
-  const riskFactor = inferRiskFactor(documentAnalyses);
+  const weatherFactor = regionalContext.weatherFactor;
+  const marketFactor = regionalContext.marketFactor;
+  const riskFactor = Number(
+    (inferRiskFactor(documentAnalyses) * regionalContext.scheduleRiskFactor).toFixed(2)
+  );
   const adjustedDirectCost = subtotal * weatherFactor * riskFactor;
   const overhead = Number(
     ((adjustedDirectCost * context.overheadPercent) / 100).toFixed(2)
@@ -313,7 +353,10 @@ export async function generateEstimateForProject(projectId: string, userId?: str
   const totalLaborHours = directCosts.reduce((sum, item) => sum + item.laborHours, 0);
   const duration = Math.max(
     5,
-    Math.ceil(totalLaborHours / (context.rateLibrary.defaultCrewSize * context.rateLibrary.hoursPerDay))
+    Math.ceil(
+      (totalLaborHours * regionalContext.scheduleRiskFactor) /
+        (context.rateLibrary.defaultCrewSize * context.rateLibrary.hoursPerDay)
+    )
   );
   const version = (project.estimates[0]?.version || 0) + 1;
 
@@ -332,7 +375,9 @@ export async function generateEstimateForProject(projectId: string, userId?: str
       total,
       duration,
       weatherFactor,
+      marketFactor,
       riskFactor,
+      regionalContext: JSON.stringify(regionalContext),
       takeoffItems: {
         create: directCosts.map((item) => ({
           trade: item.trade,
@@ -349,6 +394,7 @@ export async function generateEstimateForProject(projectId: string, userId?: str
     },
     include: {
       takeoffItems: true,
+      proposalDelivery: true,
     },
   });
 

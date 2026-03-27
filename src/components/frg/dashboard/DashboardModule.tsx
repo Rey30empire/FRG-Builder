@@ -3,6 +3,7 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import {
+  AlertTriangle,
   ArrowRight,
   BookOpen,
   BriefcaseBusiness,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { useAppStore, useProjectsStore } from "@/store";
 import type { Campaign, Lead, LearningItem, Project } from "@/types";
 import { ModuleHeader } from "@/components/frg/ModuleHeader";
+import { BidBoardPanel } from "@/components/frg/dashboard/BidBoardPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +41,21 @@ interface LearningSummaryResponse {
     completionRate: number;
     totalTimeSpent: number;
   };
+}
+
+interface OpsOverviewResponse {
+  health: {
+    status: "healthy" | "warning" | "critical";
+    releaseReady: boolean;
+  };
+  stats: {
+    openTickets: number;
+    openIncidents: number;
+    overdueFollowUps: number;
+    staleProposals: number;
+    maintenanceRuns: number;
+  };
+  alerts: string[];
 }
 
 function formatDate(value?: Date | string | null) {
@@ -115,6 +132,8 @@ export function DashboardModule() {
   });
   const [isLoading, setIsLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [ops, setOps] = React.useState<OpsOverviewResponse | null>(null);
+  const isAdminView = (activeUser?.level ?? 0) >= 4;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -124,12 +143,11 @@ export function DashboardModule() {
       setLoadError(null);
 
       try {
-        const userId = activeUser?.id || "default-user";
         const [projectsRes, leadsRes, campaignsRes, learningRes] = await Promise.all([
-          fetch(`/api/projects?userId=${encodeURIComponent(userId)}`),
-          fetch(`/api/leads?userId=${encodeURIComponent(userId)}`),
-          fetch(`/api/campaigns?userId=${encodeURIComponent(userId)}`),
-          fetch(`/api/learning?userId=${encodeURIComponent(userId)}`),
+          fetch("/api/projects"),
+          fetch("/api/leads"),
+          fetch("/api/campaigns"),
+          fetch("/api/learning"),
         ]);
 
         const [projectsJson, leadsJson, campaignsJson, learningJson] = await Promise.all([
@@ -157,6 +175,16 @@ export function DashboardModule() {
                 },
               }
         );
+
+        if (isAdminView) {
+          const opsRes = await fetch("/api/ops/overview");
+          const opsJson = (await opsRes.json()) as ApiEnvelope<OpsOverviewResponse>;
+          if (!cancelled) {
+            setOps(opsJson.success ? opsJson.data : null);
+          }
+        } else if (!cancelled) {
+          setOps(null);
+        }
       } catch (error) {
         if (!cancelled) {
           setLoadError(error instanceof Error ? error.message : "Failed to load dashboard");
@@ -173,7 +201,7 @@ export function DashboardModule() {
     return () => {
       cancelled = true;
     };
-  }, [activeUser?.id, setProjects]);
+  }, [activeUser?.id, activeUser?.level, isAdminView, setProjects]);
 
   const activeProjects = React.useMemo(
     () => projects.filter((project) => project.status === "active"),
@@ -239,6 +267,43 @@ export function DashboardModule() {
     }, 0);
   }, [leads]);
 
+  const statusIndicators = React.useMemo(
+    () => [
+      {
+        id: "projects",
+        label: "Projects",
+        status: activeProjects.length > 0 ? ("success" as const) : ("idle" as const),
+        value: activeProjects.length,
+      },
+      {
+        id: "loading",
+        label: "Sync",
+        status: isLoading
+          ? ("pending" as const)
+          : loadError
+            ? ("error" as const)
+            : ("success" as const),
+        value: isLoading ? "Loading" : loadError ? "Check data" : "Ready",
+      },
+      ...(isAdminView
+        ? [
+            {
+              id: "ops",
+              label: "Ops",
+              status:
+                ops?.health.status === "critical"
+                  ? ("error" as const)
+                  : ops?.health.status === "warning"
+                    ? ("warning" as const)
+                    : ("success" as const),
+              value: ops?.health.releaseReady ? "Release ready" : "Needs infra",
+            },
+          ]
+        : []),
+    ],
+    [activeProjects.length, isAdminView, isLoading, loadError, ops?.health.releaseReady, ops?.health.status]
+  );
+
   return (
     <div className="flex h-full flex-col bg-slate-950">
       <ModuleHeader
@@ -266,20 +331,7 @@ export function DashboardModule() {
             variant: "outline",
           },
         ]}
-        statusIndicators={[
-          {
-            id: "projects",
-            label: "Projects",
-            status: activeProjects.length > 0 ? "success" : "idle",
-            value: activeProjects.length,
-          },
-          {
-            id: "loading",
-            label: "Sync",
-            status: isLoading ? "pending" : loadError ? "error" : "success",
-            value: isLoading ? "Loading" : loadError ? "Check data" : "Ready",
-          },
-        ]}
+        statusIndicators={statusIndicators}
       />
 
       <ScrollArea className="flex-1">
@@ -319,6 +371,8 @@ export function DashboardModule() {
               tone="rose"
             />
           </motion.div>
+
+          <BidBoardPanel />
 
           {loadError && (
             <Card className="border-rose-500/30 bg-rose-500/5">
@@ -530,6 +584,69 @@ export function DashboardModule() {
                   </div>
                 </CardContent>
               </Card>
+
+              {isAdminView ? (
+                <Card className="bg-slate-900/60 border-slate-800">
+                  <CardHeader>
+                    <CardTitle className="text-white">Ops Pulse</CardTitle>
+                    <CardDescription className="text-slate-400">
+                      Live operational posture for support, incidents and maintenance
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Health</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">
+                          {ops?.health.status || "unknown"}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Release</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">
+                          {ops?.health.releaseReady ? "ready" : "hold"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Tickets</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{ops?.stats.openTickets || 0}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Incidents</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{ops?.stats.openIncidents || 0}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Overdue follow-ups</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{ops?.stats.overdueFollowUps || 0}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Stale proposals</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{ops?.stats.staleProposals || 0}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <p className="text-xs uppercase tracking-wide text-slate-500">Current alerts</p>
+                      {(ops?.alerts || []).length > 0 ? (
+                        ops?.alerts.slice(0, 4).map((alert) => (
+                          <div
+                            key={alert}
+                            className="flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100"
+                          >
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                            <span>{alert}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-slate-500">No operational alerts right now.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
           </div>
 

@@ -16,6 +16,7 @@ import {
   Shield,
   User,
   Wrench,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppStore, useChatStore, useProjectsStore } from "@/store";
@@ -87,56 +88,23 @@ export function AppSidebar({ className }: AppSidebarProps) {
   
   const { projects, setProjects } = useProjectsStore();
   const clearMessages = useChatStore((state) => state.clearMessages);
-  const [isUsersLoading, setIsUsersLoading] = React.useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-
-    async function loadUsers() {
-      setIsUsersLoading(true);
-
-      try {
-        const response = await fetch("/api/users");
-        const payload = await response.json();
-
-        if (cancelled || !payload?.success || !Array.isArray(payload.data)) {
-          return;
-        }
-
-        const users = payload.data as AppUser[];
-        setAvailableUsers(users);
-
-        if (!activeUser || !users.some((user) => user.id === activeUser.id)) {
-          setActiveUser(users[0] || null);
-        }
-      } catch (error) {
-        console.error("Failed to load users:", error);
-      } finally {
-        if (!cancelled) {
-          setIsUsersLoading(false);
-        }
-      }
-    }
-
-    loadUsers();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeUser?.id, setActiveUser, setAvailableUsers]);
 
   const handleModuleClick = (module: Module) => {
     setActiveModule(module);
   };
 
-  const handleUserSwitch = (user: AppUser) => {
-    if (activeUser?.id === user.id) return;
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+    }).catch(() => undefined);
 
-    setActiveUser(user);
+    setActiveUser(null);
+    setAvailableUsers([]);
     setActiveProject(null);
     setActiveConversation(null);
     setProjects([]);
     clearMessages();
+    window.location.reload();
   };
 
   const toggleSidebar = () => {
@@ -387,10 +355,10 @@ export function AppSidebar({ className }: AppSidebarProps) {
                     className="ml-3 flex-1 text-left overflow-hidden"
                   >
                     <p className="text-sm font-medium text-slate-200 truncate">
-                      {activeUser?.name || (isUsersLoading ? "Loading profile..." : "No profile")}
+                      {activeUser?.name || "No profile"}
                     </p>
                     <p className="text-xs text-slate-500 truncate">
-                      {activeUser?.email || "Select a profile"}
+                      {activeUser?.email || "No active session"}
                     </p>
                   </motion.div>
                 )}
@@ -407,10 +375,9 @@ export function AppSidebar({ className }: AppSidebarProps) {
               Active Profile
             </DropdownMenuLabel>
             <DropdownMenuSeparator className="bg-slate-800" />
-            {availableUsers.map((user) => (
+            {availableUsers.map((user: AppUser) => (
               <DropdownMenuItem
                 key={user.id}
-                onClick={() => handleUserSwitch(user)}
                 className={cn(
                   "text-slate-200 hover:bg-slate-800 focus:bg-slate-800",
                   activeUser?.id === user.id && "bg-slate-800"
@@ -439,6 +406,14 @@ export function AppSidebar({ className }: AppSidebarProps) {
             <DropdownMenuItem className="text-slate-200 hover:bg-slate-800 focus:bg-slate-800">
               <Settings className="h-4 w-4 mr-2" />
               Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-slate-800" />
+            <DropdownMenuItem
+              onClick={() => void handleLogout()}
+              className="text-rose-300 hover:bg-slate-800 focus:bg-slate-800 focus:text-rose-300"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

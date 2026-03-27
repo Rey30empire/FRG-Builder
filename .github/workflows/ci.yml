@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: file:../db/ci.db
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Prepare workspace
+        run: mkdir -p db public/uploads/documents
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate environment
+        run: npm run check:env
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Sync test database
+        run: npm run db:push
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build

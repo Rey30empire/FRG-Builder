@@ -1,10 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateProposalPdfBytes, getProposalContext } from "@/lib/proposals";
+import { canAccessEstimate } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
+import { hasPermissionCapability } from "@/lib/permissions";
 
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
+    if (!hasPermissionCapability(auth.user, "export")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Exporting proposal PDFs requires permission level 2 or admin access.",
+        },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const estimateId = searchParams.get("estimateId");
 
@@ -12,6 +28,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Estimate ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessEstimate(auth.user, estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
       );
     }
 

@@ -1,22 +1,69 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeUser } from "@/lib/api-serializers";
+import { hashPassword, isAdminUser, normalizeEmail, requireSessionUser } from "@/lib/auth";
+import { DEFAULT_AI_SETTINGS } from "@/lib/ai-settings";
 import { db } from "@/lib/db";
-import { DEFAULT_USER_ID, ensureSystemUsers } from "@/lib/default-user";
+import { ensureSystemUsers } from "@/lib/default-user";
+import { stringifyJson } from "@/lib/json";
+import { buildWorkspaceMemoryDefaults } from "@/lib/user-workspace";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     await ensureSystemUsers();
 
+    const currentUser = auth.user;
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 
     if (id) {
+      if (!isAdminUser(currentUser) && currentUser.id !== id) {
+        return NextResponse.json(
+          { success: false, error: "Forbidden" },
+          { status: 403 }
+        );
+      }
+
       const user = await db.user.findUnique({
         where: { id },
-        include: { userMemory: true },
+        include: {
+          userMemory: true,
+          _count: {
+            select: {
+              projects: true,
+              learningItems: true,
+              leads: true,
+              campaigns: true,
+            },
+          },
+        },
       });
 
       return NextResponse.json({ success: true, data: user ? serializeUser(user) : null });
+    }
+
+    if (!isAdminUser(currentUser)) {
+      const user = await db.user.findUnique({
+        where: { id: currentUser.id },
+        include: {
+          userMemory: true,
+          _count: {
+            select: {
+              projects: true,
+              learningItems: true,
+              leads: true,
+              campaigns: true,
+            },
+          },
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        data: user ? [serializeUser(user)] : [],
+      });
     }
 
     const users = await db.user.findMany({
@@ -46,12 +93,23 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { email, name, role, level, avatar } = body;
-
-    if (!email) {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+    if (!isAdminUser(auth.user)) {
       return NextResponse.json(
-        { success: false, error: "Email is required" },
+        { success: false, error: "Admin access required" },
+        { status: 403 }
+      );
+    }
+
+    const body = await request.json();
+    const email = typeof body.email === "string" ? normalizeEmail(body.email) : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const { name, role, level, avatar } = body;
+
+    if (!email || !password) {
+      return NextResponse.json(
+        { success: false, error: "Email and password are required" },
         { status: 400 }
       );
     }
@@ -63,10 +121,11 @@ export async function POST(request: NextRequest) {
         role: role || "user",
         level: level ?? 1,
         avatar,
+        passwordHash: hashPassword(password),
         userMemory: {
           create: {
-            language: "es",
-            explanationStyle: "detailed",
+            ...buildWorkspaceMemoryDefaults({ email, name }),
+            aiProviderConfig: stringifyJson(DEFAULT_AI_SETTINGS),
           },
         },
       },
@@ -85,13 +144,45 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id = DEFAULT_USER_ID, userMemory, ...updates } = body;
+    const targetUserId = typeof body.id === "string" ? body.id : auth.user.id;
+    const userMemory = body.userMemory;
+    const password = typeof body.password === "string" ? body.password : undefined;
+    const email = typeof body.email === "string" ? normalizeEmail(body.email) : undefined;
+    const {
+      id: _id,
+      password: _password,
+      userMemory: _userMemory,
+      email: _email,
+      role: _role,
+      level: _level,
+      ...updates
+    } = body;
+
+    if (!isAdminUser(auth.user) && targetUserId !== auth.user.id) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden" },
+        { status: 403 }
+      );
+    }
+
+    const baseUpdates = isAdminUser(auth.user)
+      ? {
+          ...updates,
+          role: body.role,
+          level: body.level,
+        }
+      : updates;
 
     const user = await db.user.update({
-      where: { id },
+      where: { id: targetUserId },
       data: {
-        ...updates,
+        ...baseUpdates,
+        email,
+        ...(password ? { passwordHash: hashPassword(password) } : {}),
         userMemory: userMemory
           ? {
               upsert: {

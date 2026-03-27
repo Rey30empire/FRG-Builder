@@ -2,15 +2,17 @@
 
 import * as React from "react";
 import {
-  Calendar,
   CheckCircle2,
   FileText,
+  Loader2,
   Mail,
   Plus,
   Rocket,
   Search,
+  Send,
   Sparkles,
   Target,
+  TrendingUp,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -28,6 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { getLeadFollowUpState, getLeadWeightedValue } from "@/lib/crm";
 
 type BoostTab = "pipeline" | "campaigns" | "generator";
 type GeneratorMode = "email" | "social" | "sequence";
@@ -62,6 +65,14 @@ function formatDate(value?: Date | string | null) {
   return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function formatCurrency(value?: number | null) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+}
+
 function relativeTime(value?: string | Date | null) {
   if (!value) return "No activity";
   const diff = Date.now() - new Date(value).getTime();
@@ -80,6 +91,33 @@ async function readApi<T>(input: RequestInfo | URL, init?: RequestInit) {
   return payload.data as T;
 }
 
+function getPriorityTone(priority?: Lead["priority"]) {
+  switch (priority) {
+    case "high":
+      return "border-rose-500/40 bg-rose-500/10 text-rose-200";
+    case "low":
+      return "border-slate-700 bg-slate-900 text-slate-300";
+    default:
+      return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  }
+}
+
+function getFollowUpTone(value?: Date | string | null) {
+  const state = getLeadFollowUpState(value);
+  switch (state) {
+    case "overdue":
+      return "border-rose-500/40 bg-rose-500/10 text-rose-200";
+    case "today":
+      return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    case "this-week":
+      return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+    case "scheduled":
+      return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+    default:
+      return "border-slate-700 bg-slate-900 text-slate-300";
+  }
+}
+
 function LeadItem({ lead, active, onClick }: { lead: Lead; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -95,10 +133,19 @@ function LeadItem({ lead, active, onClick }: { lead: Lead; active: boolean; onCl
           <p className="truncate text-sm font-semibold text-white">{lead.name}</p>
           <p className="truncate text-xs text-slate-500">{lead.company || "No company"}</p>
         </div>
-        <Badge variant="outline" className="border-slate-700 text-slate-300">{lead.status}</Badge>
+        <div className="flex flex-col items-end gap-2">
+          <Badge variant="outline" className="border-slate-700 text-slate-300">{lead.status}</Badge>
+          <Badge variant="outline" className={getPriorityTone(lead.priority || "medium")}>
+            {lead.priority || "medium"}
+          </Badge>
+        </div>
       </div>
       <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
         <span>{lead.email || "No email"}</span>
+        <span>{lead.estimatedValue ? formatCurrency(lead.estimatedValue) : "No value"}</span>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+        <span className="truncate">{lead.source || "No source"}</span>
         <span>{lead.nextFollowUp ? formatDate(lead.nextFollowUp) : "No follow-up"}</span>
       </div>
     </button>
@@ -131,23 +178,41 @@ export function BoostModule({ className }: { className?: string }) {
   const [activity, setActivity] = React.useState<ActivityEntry[]>([]);
   const [selectedLeadId, setSelectedLeadId] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [isSendingEmailId, setIsSendingEmailId] = React.useState<string | null>(null);
   const [isLeadDialogOpen, setIsLeadDialogOpen] = React.useState(false);
   const [isCampaignDialogOpen, setIsCampaignDialogOpen] = React.useState(false);
   const [generatorMode, setGeneratorMode] = React.useState<GeneratorMode>("email");
   const [generatorOutput, setGeneratorOutput] = React.useState<GeneratorOutput | null>(null);
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
-  const [leadDraft, setLeadDraft] = React.useState({ name: "", company: "", email: "", phone: "", source: "website", notes: "" });
-  const [campaignDraft, setCampaignDraft] = React.useState({ name: "", type: "email", target: "", status: "draft" });
+  const [leadDraft, setLeadDraft] = React.useState({
+    name: "",
+    company: "",
+    email: "",
+    phone: "",
+    source: "website",
+    notes: "",
+    priority: "medium",
+    estimatedValue: "",
+    nextFollowUp: "",
+    expectedCloseDate: "",
+  });
+  const [campaignDraft, setCampaignDraft] = React.useState({
+    name: "",
+    type: "email",
+    target: "",
+    status: "draft",
+    budget: "",
+    scheduledAt: "",
+  });
   const [generatorForm, setGeneratorForm] = React.useState({ topic: "", audience: "", tone: "professional", platform: "linkedin" });
 
   const syncData = React.useEffectEvent(async () => {
-    const userId = activeUser?.id || "default-user";
     const [nextLeads, nextCampaigns, nextEmails, nextActivity] = await Promise.all([
-      readApi<Lead[]>(`/api/leads?userId=${encodeURIComponent(userId)}`),
-      readApi<Campaign[]>(`/api/campaigns?userId=${encodeURIComponent(userId)}`),
-      readApi<Email[]>(`/api/emails?userId=${encodeURIComponent(userId)}`),
-      readApi<ActivityEntry[]>(`/api/activity?userId=${encodeURIComponent(userId)}&limit=10`),
+      readApi<Lead[]>("/api/leads"),
+      readApi<Campaign[]>("/api/campaigns"),
+      readApi<Email[]>("/api/emails"),
+      readApi<ActivityEntry[]>("/api/activity?limit=10"),
     ]);
     React.startTransition(() => {
       setLeads(nextLeads);
@@ -186,12 +251,20 @@ export function BoostModule({ className }: { className?: string }) {
 
   const selectedLead = leads.find((lead) => lead.id === selectedLeadId) || null;
   const selectedLeadEmails = selectedLead ? emails.filter((email) => email.leadId === selectedLead.id) : [];
+  const selectedLeadInteractions = Array.isArray(selectedLead?.interactions)
+    ? selectedLead.interactions
+    : [];
   const upcomingFollowUps = [...leads].filter((lead) => lead.nextFollowUp).sort((a, b) => new Date(a.nextFollowUp as Date).getTime() - new Date(b.nextFollowUp as Date).getTime()).slice(0, 5);
+  const overdueLeads = leads.filter((lead) => getLeadFollowUpState(lead.nextFollowUp) === "overdue");
+  const weightedPipeline = leads.reduce((sum, lead) => sum + getLeadWeightedValue(lead), 0);
+  const pipelineStages: Lead["status"][] = ["new", "contacted", "qualified", "proposal", "closed"];
   const stats = {
     leads: leads.length,
     proposals: leads.filter((lead) => lead.status === "proposal").length,
     won: leads.filter((lead) => lead.status === "closed").length,
     campaigns: campaigns.filter((campaign) => campaign.status === "active").length,
+    weightedPipeline,
+    overdue: overdueLeads.length,
   };
 
   async function handleCreateLead() {
@@ -199,9 +272,25 @@ export function BoostModule({ className }: { className?: string }) {
       await readApi<Lead>("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...leadDraft, userId: activeUser?.id || "default-user" }),
+        body: JSON.stringify({
+          ...leadDraft,
+          estimatedValue: leadDraft.estimatedValue ? Number(leadDraft.estimatedValue) : undefined,
+          nextFollowUp: leadDraft.nextFollowUp || undefined,
+          expectedCloseDate: leadDraft.expectedCloseDate || undefined,
+        }),
       });
-      setLeadDraft({ name: "", company: "", email: "", phone: "", source: "website", notes: "" });
+      setLeadDraft({
+        name: "",
+        company: "",
+        email: "",
+        phone: "",
+        source: "website",
+        notes: "",
+        priority: "medium",
+        estimatedValue: "",
+        nextFollowUp: "",
+        expectedCloseDate: "",
+      });
       setIsLeadDialogOpen(false);
       await syncData();
       toast({ title: "Lead created", description: "The CRM pipeline was updated." });
@@ -235,16 +324,64 @@ export function BoostModule({ className }: { className?: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...campaignDraft,
-          userId: activeUser?.id || "default-user",
+          budget: campaignDraft.budget ? Number(campaignDraft.budget) : undefined,
+          scheduledAt: campaignDraft.scheduledAt || undefined,
           content: generatorOutput && generatorMode !== "email" ? generatorOutput : null,
         }),
       });
-      setCampaignDraft({ name: "", type: "email", target: "", status: "draft" });
+      setCampaignDraft({
+        name: "",
+        type: "email",
+        target: "",
+        status: "draft",
+        budget: "",
+        scheduledAt: "",
+      });
       setIsCampaignDialogOpen(false);
       await syncData();
       toast({ title: "Campaign created", description: "The promotion draft is now stored in Boost." });
     } catch (error) {
       toast({ title: "Campaign creation failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
+    }
+  }
+
+  async function handleSendEmail(emailId: string) {
+    try {
+      setIsSendingEmailId(emailId);
+      await readApi<Email>("/api/emails/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emailId,
+          nextFollowUp: selectedLead?.nextFollowUp ? new Date(selectedLead.nextFollowUp).toISOString() : undefined,
+        }),
+      });
+      await syncData();
+      toast({ title: "Email sent", description: "The follow-up was delivered and the CRM activity was updated." });
+    } catch (error) {
+      toast({ title: "Email send failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setIsSendingEmailId(null);
+    }
+  }
+
+  async function handleCampaignStatusChange(campaign: Campaign, status: Campaign["status"]) {
+    try {
+      setIsSaving(true);
+      await readApi<Campaign>("/api/campaigns", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...campaign,
+          status,
+        }),
+      });
+      await syncData();
+      toast({ title: "Campaign updated", description: `Campaign moved to ${status}.` });
+    } catch (error) {
+      toast({ title: "Campaign update failed", description: error instanceof Error ? error.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -281,7 +418,6 @@ export function BoostModule({ className }: { className?: string }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            userId: activeUser?.id || "default-user",
             leadId: selectedLead?.id,
             projectId: activeProject?.id,
             subject: generatorOutput.subject || `Draft for ${generatorForm.topic}`,
@@ -297,7 +433,6 @@ export function BoostModule({ className }: { className?: string }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            userId: activeUser?.id || "default-user",
             name: generatorMode === "social" ? `${generatorForm.topic} social push` : `${selectedLead?.name || "Lead"} follow-up sequence`,
             type: generatorMode === "social" ? "social" : "email",
             target: generatorForm.audience || selectedLead?.company || "Target audience",
@@ -330,6 +465,7 @@ export function BoostModule({ className }: { className?: string }) {
           { id: "leads", label: "Leads", status: stats.leads ? "success" : "idle", value: stats.leads },
           { id: "proposals", label: "Proposal", status: stats.proposals ? "pending" : "idle", value: stats.proposals },
           { id: "campaigns", label: "Campaigns", status: stats.campaigns ? "success" : "idle", value: stats.campaigns },
+          { id: "follow-ups", label: "Overdue", status: stats.overdue ? "error" : "idle", value: stats.overdue },
         ]}
       />
 
@@ -389,19 +525,105 @@ export function BoostModule({ className }: { className?: string }) {
                   ))}
                 </div>
 
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <Card className="border-slate-800 bg-slate-950/70">
+                    <CardHeader>
+                      <CardTitle className="text-white">Weighted Pipeline</CardTitle>
+                      <CardDescription className="text-slate-400">Estimated value weighted by stage probability.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex items-center justify-between">
+                      <div>
+                        <p className="text-3xl font-semibold text-white">{formatCurrency(stats.weightedPipeline)}</p>
+                        <p className="mt-2 text-sm text-slate-500">Open pipeline value {formatCurrency(leads.reduce((sum, lead) => sum + Number(lead.estimatedValue || 0), 0))}</p>
+                      </div>
+                      <div className="rounded-2xl bg-orange-500/10 p-3 text-orange-400">
+                        <TrendingUp className="h-6 w-6" />
+                      </div>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-slate-800 bg-slate-950/70">
+                    <CardHeader>
+                      <CardTitle className="text-white">Follow-up Health</CardTitle>
+                      <CardDescription className="text-slate-400">Keep overdue opportunities from going cold.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 md:grid-cols-3">
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Overdue</p>
+                        <p className="mt-2 text-2xl font-semibold text-rose-200">{stats.overdue}</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">Today</p>
+                        <p className="mt-2 text-2xl font-semibold text-amber-200">{leads.filter((lead) => getLeadFollowUpState(lead.nextFollowUp) === "today").length}</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                        <p className="text-xs uppercase tracking-wide text-slate-500">This Week</p>
+                        <p className="mt-2 text-2xl font-semibold text-sky-200">{leads.filter((lead) => getLeadFollowUpState(lead.nextFollowUp) === "this-week").length}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-5">
+                  {pipelineStages.map((stage) => {
+                    const stageLeads = filteredLeads.filter((lead) => lead.status === stage);
+                    const stageValue = stageLeads.reduce((sum, lead) => sum + Number(lead.estimatedValue || 0), 0);
+
+                    return (
+                      <Card key={stage} className="border-slate-800 bg-slate-950/70">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <CardTitle className="text-sm capitalize text-white">{stage}</CardTitle>
+                            <Badge variant="outline" className="border-slate-700 text-slate-300">{stageLeads.length}</Badge>
+                          </div>
+                          <CardDescription className="text-slate-500">{formatCurrency(stageValue)}</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {stageLeads.slice(0, 3).map((lead) => (
+                            <button
+                              key={lead.id}
+                              type="button"
+                              onClick={() => setSelectedLeadId(lead.id)}
+                              className="w-full rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-left transition hover:border-slate-700"
+                            >
+                              <p className="truncate text-sm font-medium text-white">{lead.name}</p>
+                              <p className="truncate text-xs text-slate-500">{lead.company || lead.source || "No company"}</p>
+                              <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                                <span>{formatCurrency(lead.estimatedValue)}</span>
+                                <span>{lead.nextFollowUp ? formatDate(lead.nextFollowUp) : "No follow-up"}</span>
+                              </div>
+                            </button>
+                          ))}
+                          {!stageLeads.length ? <p className="text-xs text-slate-500">No leads in this stage.</p> : null}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+
                 {selectedLead ? (
                   <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                     <Card className="border-slate-800 bg-slate-950/70">
-                      <CardHeader>
-                        <CardTitle className="text-white">Lead Workspace</CardTitle>
-                        <CardDescription className="text-slate-400">Update status, notes, and proposal follow-up for the selected lead.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label className="text-slate-400">Name</Label>
-                            <Input value={selectedLead.name} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, name: event.target.value } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                        <CardHeader>
+                          <CardTitle className="text-white">Lead Workspace</CardTitle>
+                          <CardDescription className="text-slate-400">Update status, notes, and proposal follow-up for the selected lead.</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="flex flex-wrap gap-2">
+                            <Badge variant="outline" className={getPriorityTone(selectedLead.priority || "medium")}>
+                              Priority: {selectedLead.priority || "medium"}
+                            </Badge>
+                            <Badge variant="outline" className={getFollowUpTone(selectedLead.nextFollowUp)}>
+                              Follow-up: {selectedLead.nextFollowUp ? formatDate(selectedLead.nextFollowUp) : "Not scheduled"}
+                            </Badge>
+                            <Badge variant="outline" className="border-slate-700 text-slate-300">
+                              Weighted value: {formatCurrency(getLeadWeightedValue(selectedLead))}
+                            </Badge>
                           </div>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Name</Label>
+                              <Input value={selectedLead.name} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, name: event.target.value } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
                           <div className="space-y-2">
                             <Label className="text-slate-400">Company</Label>
                             <Input value={selectedLead.company || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, company: event.target.value } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
@@ -420,20 +642,45 @@ export function BoostModule({ className }: { className?: string }) {
                             </Select>
                           </div>
                         </div>
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label className="text-slate-400">Next Follow-up</Label>
-                            <Input type="date" value={selectedLead.nextFollowUp ? new Date(selectedLead.nextFollowUp).toISOString().slice(0, 10) : ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, nextFollowUp: event.target.value ? new Date(`${event.target.value}T12:00:00`) : undefined } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Next Follow-up</Label>
+                              <Input type="date" value={selectedLead.nextFollowUp ? new Date(selectedLead.nextFollowUp).toISOString().slice(0, 10) : ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, nextFollowUp: event.target.value ? new Date(`${event.target.value}T12:00:00`) : undefined } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Source</Label>
+                              <Input value={selectedLead.source || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, source: event.target.value } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Priority</Label>
+                              <Select value={selectedLead.priority || "medium"} onValueChange={(value) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, priority: value as Lead["priority"] } : lead))}>
+                                <SelectTrigger className="border-slate-800 bg-slate-900 text-slate-200"><SelectValue /></SelectTrigger>
+                                <SelectContent className="border-slate-800 bg-slate-900 text-slate-200">
+                                  <SelectItem value="low">low</SelectItem>
+                                  <SelectItem value="medium">medium</SelectItem>
+                                  <SelectItem value="high">high</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Estimated Value</Label>
+                              <Input type="number" value={selectedLead.estimatedValue || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, estimatedValue: event.target.value ? Number(event.target.value) : undefined } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Expected Close</Label>
+                              <Input type="date" value={selectedLead.expectedCloseDate ? new Date(selectedLead.expectedCloseDate).toISOString().slice(0, 10) : ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, expectedCloseDate: event.target.value ? new Date(`${event.target.value}T12:00:00`) : undefined } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-slate-400">Last Contact</Label>
+                              <Input type="date" value={selectedLead.lastContactAt ? new Date(selectedLead.lastContactAt).toISOString().slice(0, 10) : ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, lastContactAt: event.target.value ? new Date(`${event.target.value}T12:00:00`) : undefined } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            </div>
                           </div>
                           <div className="space-y-2">
-                            <Label className="text-slate-400">Source</Label>
-                            <Input value={selectedLead.source || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, source: event.target.value } : lead))} className="border-slate-800 bg-slate-900 text-slate-200" />
+                            <Label className="text-slate-400">Notes</Label>
+                            <Textarea value={selectedLead.notes || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, notes: event.target.value } : lead))} className="min-h-[120px] border-slate-800 bg-slate-900 text-slate-200" />
                           </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-slate-400">Notes</Label>
-                          <Textarea value={selectedLead.notes || ""} onChange={(event) => setLeads((current) => current.map((lead) => lead.id === selectedLead.id ? { ...lead, notes: event.target.value } : lead))} className="min-h-[120px] border-slate-800 bg-slate-900 text-slate-200" />
-                        </div>
                         <div className="flex flex-wrap gap-2">
                           <Button onClick={() => void handleSaveLead()} disabled={isSaving} className="bg-orange-500 text-white hover:bg-orange-600"><CheckCircle2 className="mr-1.5 h-4 w-4" />Save lead</Button>
                           <Button variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white" onClick={() => { setGeneratorMode("email"); setGeneratorForm((current) => ({ ...current, topic: selectedLead.company ? `follow-up for ${selectedLead.company}` : `follow-up for ${selectedLead.name}`, audience: selectedLead.company || selectedLead.name })); setActiveTab("generator"); }}><Mail className="mr-1.5 h-4 w-4" />Draft follow-up</Button>
@@ -448,10 +695,43 @@ export function BoostModule({ className }: { className?: string }) {
                         <CardContent className="space-y-3">
                           {selectedLeadEmails.length ? selectedLeadEmails.map((email) => (
                             <div key={email.id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
-                              <p className="truncate text-sm font-medium text-white">{email.subject}</p>
-                              <p className="mt-1 truncate text-xs text-slate-500">{email.type} • {email.status} • {formatDate(email.sentAt || email.updatedAt)}</p>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-white">{email.subject}</p>
+                                  <p className="mt-1 truncate text-xs text-slate-500">{email.type} • {email.status} • {formatDate(email.sentAt || email.updatedAt)}</p>
+                                </div>
+                                <Badge variant="outline" className="border-slate-700 text-slate-300">{email.status}</Badge>
+                              </div>
+                              <p className="mt-3 line-clamp-3 text-sm text-slate-400">{email.body}</p>
+                              {email.status === "draft" ? (
+                                <Button
+                                  size="sm"
+                                  className="mt-3 bg-orange-500 text-white hover:bg-orange-600"
+                                  onClick={() => void handleSendEmail(email.id)}
+                                  disabled={isSendingEmailId === email.id || !selectedLead.email}
+                                >
+                                  {isSendingEmailId === email.id ? (
+                                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Send className="mr-1.5 h-4 w-4" />
+                                  )}
+                                  Send now
+                                </Button>
+                              ) : null}
                             </div>
                           )) : <p className="text-sm text-slate-500">No email records for this lead yet.</p>}
+                        </CardContent>
+                      </Card>
+                      <Card className="border-slate-800 bg-slate-950/70">
+                        <CardHeader><CardTitle className="text-white">Lead Activity</CardTitle></CardHeader>
+                        <CardContent className="space-y-3">
+                          {selectedLeadInteractions.length ? selectedLeadInteractions.map((interaction, index) => (
+                            <div key={`${String(interaction.createdAt || index)}-${index}`} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
+                              <p className="text-sm font-medium text-white">{String(interaction.title || interaction.type || "Interaction")}</p>
+                              <p className="mt-1 text-xs text-slate-500">{String(interaction.description || "No description")}</p>
+                              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-600">{interaction.createdAt ? relativeTime(String(interaction.createdAt)) : "Recorded"}</p>
+                            </div>
+                          )) : <p className="text-sm text-slate-500">No lead interactions recorded yet.</p>}
                         </CardContent>
                       </Card>
                       <Card className="border-slate-800 bg-slate-950/70">
@@ -461,6 +741,11 @@ export function BoostModule({ className }: { className?: string }) {
                             <div key={lead.id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
                               <p className="truncate text-sm font-medium text-white">{lead.name}</p>
                               <p className="mt-1 truncate text-xs text-slate-500">{lead.company || lead.status} • {formatDate(lead.nextFollowUp)}</p>
+                              <div className="mt-2">
+                                <Badge variant="outline" className={getFollowUpTone(lead.nextFollowUp)}>
+                                  {getLeadFollowUpState(lead.nextFollowUp)}
+                                </Badge>
+                              </div>
                             </div>
                           ))}
                         </CardContent>
@@ -485,7 +770,34 @@ export function BoostModule({ className }: { className?: string }) {
                         <p className="mt-4 text-base font-semibold text-white">{campaign.name}</p>
                         <p className="mt-1 text-sm text-slate-500">{campaign.target || "No target"}</p>
                         <p className="mt-4 text-xs text-slate-500">Sent {campaign.sent || 0} • Opened {campaign.opened || 0} • Won {campaign.converted || 0}</p>
+                        <div className="mt-4 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                            <p className="text-[11px] uppercase tracking-wide text-slate-500">Budget</p>
+                            <p className="mt-2 text-sm text-white">{campaign.budget ? formatCurrency(campaign.budget) : "Not set"}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                            <p className="text-[11px] uppercase tracking-wide text-slate-500">Scheduled</p>
+                            <p className="mt-2 text-sm text-white">{campaign.scheduledAt ? formatDate(campaign.scheduledAt) : "Not scheduled"}</p>
+                          </div>
+                        </div>
                         {campaign.content ? <div className="mt-4 rounded-xl bg-slate-900/70 p-3 text-xs text-slate-400">{typeof campaign.content === "object" ? JSON.stringify(campaign.content).slice(0, 180) : String(campaign.content).slice(0, 180)}</div> : null}
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {campaign.status !== "active" ? (
+                            <Button size="sm" className="bg-orange-500 text-white hover:bg-orange-600" disabled={isSaving} onClick={() => void handleCampaignStatusChange(campaign, "active")}>
+                              <Rocket className="mr-1.5 h-4 w-4" />
+                              Launch
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white" disabled={isSaving} onClick={() => void handleCampaignStatusChange(campaign, "paused")}>
+                              Pause
+                            </Button>
+                          )}
+                          {campaign.status !== "completed" ? (
+                            <Button size="sm" variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white" disabled={isSaving} onClick={() => void handleCampaignStatusChange(campaign, "completed")}>
+                              Complete
+                            </Button>
+                          ) : null}
+                        </div>
                       </CardContent>
                     </Card>
                   ))}
@@ -541,6 +853,8 @@ export function BoostModule({ className }: { className?: string }) {
                     <p className="flex items-center justify-between"><span>Current project</span><span className="text-white">{activeProject?.name || "None selected"}</span></p>
                     <p className="flex items-center justify-between"><span>Next follow-ups</span><span className="text-white">{upcomingFollowUps.length}</span></p>
                     <p className="flex items-center justify-between"><span>Draft emails</span><span className="text-white">{emails.filter((email) => email.status === "draft").length}</span></p>
+                    <p className="flex items-center justify-between"><span>Weighted pipeline</span><span className="text-white">{formatCurrency(stats.weightedPipeline)}</span></p>
+                    <p className="flex items-center justify-between"><span>Overdue follow-ups</span><span className={cn("text-white", stats.overdue ? "text-rose-300" : "text-white")}>{stats.overdue}</span></p>
                   </CardContent>
                 </Card>
               </div>
@@ -561,7 +875,23 @@ export function BoostModule({ className }: { className?: string }) {
               <div className="space-y-2"><Label className="text-slate-400">Email</Label><Input value={leadDraft.email} onChange={(event) => setLeadDraft((current) => ({ ...current, email: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
               <div className="space-y-2"><Label className="text-slate-400">Phone</Label><Input value={leadDraft.phone} onChange={(event) => setLeadDraft((current) => ({ ...current, phone: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
             </div>
-            <div className="space-y-2"><Label className="text-slate-400">Source</Label><Input value={leadDraft.source} onChange={(event) => setLeadDraft((current) => ({ ...current, source: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="space-y-2"><Label className="text-slate-400">Source</Label><Input value={leadDraft.source} onChange={(event) => setLeadDraft((current) => ({ ...current, source: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+              <div className="space-y-2">
+                <Label className="text-slate-400">Priority</Label>
+                <Select value={leadDraft.priority} onValueChange={(value) => setLeadDraft((current) => ({ ...current, priority: value }))}>
+                  <SelectTrigger className="border-slate-800 bg-slate-900 text-slate-200"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-slate-800 bg-slate-900 text-slate-200">
+                    <SelectItem value="low">low</SelectItem>
+                    <SelectItem value="medium">medium</SelectItem>
+                    <SelectItem value="high">high</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2"><Label className="text-slate-400">Est. value</Label><Input type="number" value={leadDraft.estimatedValue} onChange={(event) => setLeadDraft((current) => ({ ...current, estimatedValue: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+              <div className="space-y-2"><Label className="text-slate-400">Next follow-up</Label><Input type="date" value={leadDraft.nextFollowUp} onChange={(event) => setLeadDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+            </div>
+            <div className="space-y-2"><Label className="text-slate-400">Expected close</Label><Input type="date" value={leadDraft.expectedCloseDate} onChange={(event) => setLeadDraft((current) => ({ ...current, expectedCloseDate: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
             <div className="space-y-2"><Label className="text-slate-400">Notes</Label><Textarea value={leadDraft.notes} onChange={(event) => setLeadDraft((current) => ({ ...current, notes: event.target.value }))} className="min-h-[120px] border-slate-800 bg-slate-900 text-slate-200" /></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setIsLeadDialogOpen(false)} className="border-slate-700 text-slate-300">Cancel</Button><Button onClick={() => void handleCreateLead()} className="bg-orange-500 text-white hover:bg-orange-600">Create lead</Button></DialogFooter>
@@ -577,7 +907,11 @@ export function BoostModule({ className }: { className?: string }) {
               <div className="space-y-2"><Label className="text-slate-400">Type</Label><Input value={campaignDraft.type} onChange={(event) => setCampaignDraft((current) => ({ ...current, type: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
               <div className="space-y-2"><Label className="text-slate-400">Status</Label><Input value={campaignDraft.status} onChange={(event) => setCampaignDraft((current) => ({ ...current, status: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
             </div>
-            <div className="space-y-2"><Label className="text-slate-400">Target</Label><Input value={campaignDraft.target} onChange={(event) => setCampaignDraft((current) => ({ ...current, target: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2"><Label className="text-slate-400">Target</Label><Input value={campaignDraft.target} onChange={(event) => setCampaignDraft((current) => ({ ...current, target: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+              <div className="space-y-2"><Label className="text-slate-400">Budget</Label><Input type="number" value={campaignDraft.budget} onChange={(event) => setCampaignDraft((current) => ({ ...current, budget: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+              <div className="space-y-2"><Label className="text-slate-400">Scheduled</Label><Input type="date" value={campaignDraft.scheduledAt} onChange={(event) => setCampaignDraft((current) => ({ ...current, scheduledAt: event.target.value }))} className="border-slate-800 bg-slate-900 text-slate-200" /></div>
+            </div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setIsCampaignDialogOpen(false)} className="border-slate-700 text-slate-300">Cancel</Button><Button onClick={() => void handleCreateCampaign()} className="bg-orange-500 text-white hover:bg-orange-600">Save campaign</Button></DialogFooter>
         </DialogContent>

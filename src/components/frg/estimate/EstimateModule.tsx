@@ -21,6 +21,7 @@ import {
   Save,
   Search,
   Sparkles,
+  Trash2,
   TrendingUp,
   Upload,
   User,
@@ -28,7 +29,17 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useAppStore, useProjectsStore } from "@/store";
-import type { Document, DocumentAnalysis, Estimate, Project, ProposalData, TakeoffItem } from "@/types";
+import type {
+  BidFormData,
+  BidFormLineItem,
+  BidSubmitPackage,
+  Document,
+  DocumentAnalysis,
+  Estimate,
+  Project,
+  ProposalData,
+  TakeoffItem,
+} from "@/types";
 import { ModuleHeader } from "@/components/frg/ModuleHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +48,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -89,6 +101,17 @@ function parseLines(value: string) {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function buildBidFormLineItem(overrides?: Partial<BidFormLineItem>): BidFormLineItem {
+  return {
+    id:
+      overrides?.id ||
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    label: overrides?.label || "",
+    amount: overrides?.amount || 0,
+    notes: overrides?.notes || "",
+  };
 }
 
 function buildDefaultProposalMessage(project: Project, estimate: Estimate, recipientName?: string | null) {
@@ -169,6 +192,10 @@ function getDocumentStatus(document: Document) {
     tone: "bg-slate-500/15 text-slate-300 border-slate-500/30",
     icon: Clock,
   };
+}
+
+function formatRelevanceScore(value?: number | null) {
+  return `${Math.round(value || 0)}/100`;
 }
 
 async function readApi<T>(input: RequestInfo | URL, init?: RequestInit) {
@@ -295,13 +322,21 @@ function DropZone({
 function DocumentCard({
   document,
   onAnalyze,
+  onToggleTakeoff,
+  onToggleProposalContext,
+  isUpdating,
 }: {
   document: Document;
   onAnalyze: () => void;
+  onToggleTakeoff: () => void;
+  onToggleProposalContext: () => void;
+  isUpdating?: boolean;
 }) {
   const status = getDocumentStatus(document);
   const StatusIcon = status.icon;
   const analysis = normalizeAnalysis(document);
+  const relevanceScore = document.relevanceScore ?? analysis?.relevanceScore ?? 0;
+  const selectionReason = document.selectionReason || analysis?.selectionReason || "";
 
   return (
     <Card className="border-slate-800 bg-slate-950/70">
@@ -338,11 +373,41 @@ function DocumentCard({
               {analysis.source === "pdf-text" ? "PDF text" : "Metadata"}
             </Badge>
           )}
+          {document.selectedForTakeoff ? (
+            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+              takeoff
+            </Badge>
+          ) : null}
+          {document.selectedForProposalContext ? (
+            <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-sky-300">
+              proposal context
+            </Badge>
+          ) : null}
+          {document.requiresHumanReview ? (
+            <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-300">
+              human review
+            </Badge>
+          ) : null}
         </div>
 
         {analysis?.summary ? (
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2">
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Relevance</p>
+                <p className="text-sm font-semibold text-white">{formatRelevanceScore(relevanceScore)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[11px] uppercase tracking-wide text-slate-500">Matched scope</p>
+                <p className="text-sm text-slate-300">
+                  {analysis.matchedScopeTerms?.length ? analysis.matchedScopeTerms.join(", ") : "None"}
+                </p>
+              </div>
+            </div>
             <p className="text-xs text-slate-300">{analysis.summary}</p>
+            {selectionReason ? (
+              <p className="mt-3 text-xs text-slate-400">{selectionReason}</p>
+            ) : null}
             {analysis.keywords?.length ? (
               <div className="mt-3 flex flex-wrap gap-2">
                 {analysis.keywords.slice(0, 4).map((keyword) => (
@@ -362,11 +427,12 @@ function DocumentCard({
           </div>
         )}
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant={document.analyzed ? "outline" : "default"}
             onClick={onAnalyze}
+            disabled={isUpdating}
             className={cn(
               document.analyzed
                 ? "border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
@@ -377,12 +443,40 @@ function DocumentCard({
             {document.analyzed ? "Re-run analysis" : "Analyze"}
           </Button>
           <Button
+            size="sm"
+            variant="outline"
+            onClick={onToggleTakeoff}
+            disabled={isUpdating}
+            className={cn(
+              document.selectedForTakeoff
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                : "border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <Layers className="mr-1.5 h-4 w-4" />
+            {document.selectedForTakeoff ? "Selected for takeoff" : "Use for takeoff"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onToggleProposalContext}
+            disabled={isUpdating}
+            className={cn(
+              document.selectedForProposalContext
+                ? "border-sky-500/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
+                : "border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+            {document.selectedForProposalContext ? "Proposal context on" : "Use in proposal"}
+          </Button>
+          <Button
             asChild
             size="sm"
             variant="outline"
             className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
           >
-            <a href={document.path} target="_blank" rel="noreferrer">
+            <a href={`/api/documents/file?id=${encodeURIComponent(document.id)}`} target="_blank" rel="noreferrer">
               <Eye className="mr-1.5 h-4 w-4" />
               Open file
             </a>
@@ -464,6 +558,7 @@ function EstimateSummary({
   estimate: Estimate;
   project: ProjectWithMeta;
 }) {
+  const regionalContext = estimate.regionalContext || null;
   const topItems = [...(estimate.takeoffItems || [])]
     .sort((a, b) => (b.totalCost || 0) - (a.totalCost || 0))
     .slice(0, 5);
@@ -524,6 +619,7 @@ function EstimateSummary({
               ["Direct Cost Subtotal", formatCurrency(estimate.subtotal)],
               ["Overhead", formatCurrency(estimate.overhead)],
               ["Profit", formatCurrency(estimate.profit)],
+              ["Market Factor", estimate.marketFactor?.toFixed(2) || "1.00"],
               ["Weather Factor", estimate.weatherFactor?.toFixed(2) || "1.00"],
               ["Risk Factor", estimate.riskFactor?.toFixed(2) || "1.00"],
               ["Estimated Duration", `${estimate.duration || 0} days`],
@@ -538,27 +634,95 @@ function EstimateSummary({
 
         <Card className="border-slate-800 bg-slate-950/70">
           <CardHeader>
-            <CardTitle className="text-white">Top Cost Drivers</CardTitle>
+            <CardTitle className="text-white">
+              {regionalContext ? "Regional Intelligence" : "Top Cost Drivers"}
+            </CardTitle>
             <CardDescription className="text-slate-400">
-              Highest-value takeoff lines in this estimate.
+              {regionalContext
+                ? "Location, climate and regional pricing assumptions used by the estimate engine."
+                : "Highest-value takeoff lines in this estimate."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {topItems.map((item) => (
-              <div key={item.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-white">{item.description}</p>
-                    <p className="truncate text-xs text-slate-500">
-                      {item.trade} • {item.quantity.toLocaleString()} {item.unit}
+            {regionalContext ? (
+              <>
+                {[
+                  ["Location", regionalContext.locationSummary],
+                  ["Climate Zone", regionalContext.climateZone],
+                  ["Season", regionalContext.season],
+                  ["Pricing Region", regionalContext.pricingRegion],
+                  ["Source", regionalContext.source],
+                  ["Weather Provider", regionalContext.weatherProvider || "heuristic"],
+                  ["Market Provider", regionalContext.marketDataProvider || "heuristic"],
+                  ["Labor Index", regionalContext.laborIndex.toFixed(2)],
+                  ["Material Index", regionalContext.materialIndex.toFixed(2)],
+                  ["Equipment Index", regionalContext.equipmentIndex.toFixed(2)],
+                  ["Logistics", regionalContext.logisticsFactor.toFixed(2)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+                    <p className="mt-1 text-sm text-white">{value}</p>
+                  </div>
+                ))}
+                <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Weather Summary</p>
+                  <p className="mt-1 text-sm text-slate-200">{regionalContext.weatherSummary}</p>
+                </div>
+                {regionalContext.weatherSnapshot ? (
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">Live Weather Snapshot</p>
+                    <p className="mt-1 text-sm text-slate-200">
+                      {regionalContext.weatherSnapshot.date || "forecast"} • max{" "}
+                      {regionalContext.weatherSnapshot.temperatureMaxC ?? "?"}C • min{" "}
+                      {regionalContext.weatherSnapshot.temperatureMinC ?? "?"}C • rain{" "}
+                      {regionalContext.weatherSnapshot.precipitationMm ?? "?"} mm • wind{" "}
+                      {regionalContext.weatherSnapshot.windSpeedMaxKph ?? "?"} kph
                     </p>
                   </div>
-                  <span className="text-sm font-semibold text-orange-300">
-                    {formatCurrency(item.totalCost)}
-                  </span>
+                ) : null}
+                <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Regional Drivers</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {regionalContext.drivers.map((driver) => (
+                      <span
+                        key={driver}
+                        className="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-300"
+                      >
+                        {driver}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+                {regionalContext.liveDataNotes?.length ? (
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">Live Data Notes</p>
+                    <div className="mt-2 space-y-2">
+                      {regionalContext.liveDataNotes.map((note) => (
+                        <p key={note} className="text-xs text-slate-400">
+                          {note}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              topItems.map((item) => (
+                <div key={item.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-white">{item.description}</p>
+                      <p className="truncate text-xs text-slate-500">
+                        {item.trade} • {item.quantity.toLocaleString()} {item.unit}
+                      </p>
+                    </div>
+                    <span className="text-sm font-semibold text-orange-300">
+                      {formatCurrency(item.totalCost)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
       </div>
@@ -589,6 +753,8 @@ function ProposalDraft({
     );
   }
 
+  const regionalContext = estimate.regionalContext || null;
+
   return (
     <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
       <div className="space-y-6">
@@ -605,6 +771,7 @@ function ProposalDraft({
               ["Client", proposalData.recipientName || project.client || "Pending"],
               ["Email", proposalData.recipientEmail || project.clientEmail || "Pending"],
               ["Address", project.address || "Pending"],
+              ["Region", regionalContext?.locationSummary || "Standard pricing"],
               ["Price", formatCurrency(estimate.total)],
               ["Duration", `${estimate.duration || 0} days`],
               ["Template", proposalData.template],
@@ -729,6 +896,7 @@ export function EstimateModule({ className }: { className?: string }) {
   const [isLoading, setIsLoading] = React.useState(true);
   const [isUploading, setIsUploading] = React.useState(false);
   const [isAnalyzing, setIsAnalyzing] = React.useState(false);
+  const [updatingDocumentId, setUpdatingDocumentId] = React.useState<string | null>(null);
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [isLoadingProposal, setIsLoadingProposal] = React.useState(false);
   const [isSavingProposal, setIsSavingProposal] = React.useState(false);
@@ -739,16 +907,25 @@ export function EstimateModule({ className }: { className?: string }) {
   const [proposalRecipientEmail, setProposalRecipientEmail] = React.useState("");
   const [proposalIntro, setProposalIntro] = React.useState("");
   const [proposalScopeSummary, setProposalScopeSummary] = React.useState("");
+  const [proposalTemplate, setProposalTemplate] = React.useState<ProposalData["template"]>("commercial");
   const [proposalSchedule, setProposalSchedule] = React.useState("");
   const [proposalCoverNote, setProposalCoverNote] = React.useState("");
   const [proposalInclusions, setProposalInclusions] = React.useState("");
   const [proposalExclusions, setProposalExclusions] = React.useState("");
   const [proposalTerms, setProposalTerms] = React.useState("");
   const [proposalMessage, setProposalMessage] = React.useState("");
+  const [isLoadingBidForm, setIsLoadingBidForm] = React.useState(false);
+  const [isSavingBidForm, setIsSavingBidForm] = React.useState(false);
+  const [isPreparingBidPackage, setIsPreparingBidPackage] = React.useState(false);
+  const [bidFormData, setBidFormData] = React.useState<BidFormData | null>(null);
+  const [submitPackage, setSubmitPackage] = React.useState<BidSubmitPackage | null>(null);
+  const [bidSubmitMethod, setBidSubmitMethod] =
+    React.useState<BidSubmitPackage["submitMethod"]>("portal");
+  const [bidSubmitTo, setBidSubmitTo] = React.useState("");
+  const [bidPackageNotes, setBidPackageNotes] = React.useState("");
 
   const syncProjects = React.useEffectEvent(async (preferredProjectId?: string | null) => {
-    const userId = activeUser?.id || "default-user";
-    const data = await readApi<Project[]>(`/api/projects?userId=${encodeURIComponent(userId)}`);
+    const data = await readApi<Project[]>("/api/projects");
 
     React.startTransition(() => {
       setProjects(data);
@@ -773,12 +950,36 @@ export function EstimateModule({ className }: { className?: string }) {
       setProposalRecipientEmail(data.proposalData.recipientEmail || project.clientEmail || "");
       setProposalIntro(data.proposalData.intro || "");
       setProposalScopeSummary(data.proposalData.scopeSummary || "");
+      setProposalTemplate(data.proposalData.template || "commercial");
       setProposalSchedule(data.proposalData.schedule || "");
       setProposalCoverNote(data.proposalData.coverNote || "");
       setProposalInclusions(normalizeLines(data.proposalData.inclusions));
       setProposalExclusions(normalizeLines(data.proposalData.exclusions));
       setProposalTerms(normalizeLines(data.proposalData.terms));
       setProposalMessage(buildDefaultProposalMessage(project, data.estimate, data.proposalData.recipientName || project.client));
+    });
+  });
+
+  const syncBidForm = React.useEffectEvent(async (opportunityId: string, estimateId: string) => {
+    const data = await readApi<{
+      bidFormData: BidFormData;
+      submitPackage: BidSubmitPackage | null;
+    }>(
+      `/api/opportunities/bid-form?opportunityId=${encodeURIComponent(opportunityId)}&estimateId=${encodeURIComponent(estimateId)}`
+    );
+
+    React.startTransition(() => {
+      setBidFormData({
+        ...data.bidFormData,
+        lineItems:
+          data.bidFormData.lineItems.length > 0
+            ? data.bidFormData.lineItems
+            : [buildBidFormLineItem()],
+      });
+      setSubmitPackage(data.submitPackage);
+      setBidSubmitMethod(data.submitPackage?.submitMethod || "portal");
+      setBidSubmitTo(data.submitPackage?.submitTo || "");
+      setBidPackageNotes(data.submitPackage?.notes || "");
     });
   });
 
@@ -843,7 +1044,10 @@ export function EstimateModule({ className }: { className?: string }) {
   const selectedDocuments = React.useMemo(
     () =>
       [...(selectedProject?.documents || [])].sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        (a, b) =>
+          Number(b.selectedForTakeoff) - Number(a.selectedForTakeoff) ||
+          Number(b.relevanceScore || 0) - Number(a.relevanceScore || 0) ||
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       ),
     [selectedProject]
   );
@@ -851,6 +1055,11 @@ export function EstimateModule({ className }: { className?: string }) {
   const currentEstimate = selectedProject?.latestEstimate || null;
   const analyzedDocuments = selectedDocuments.filter((document) => document.analyzed);
   const pendingDocuments = selectedDocuments.filter((document) => !document.analyzed);
+  const takeoffCandidateDocuments = selectedDocuments.filter((document) => document.selectedForTakeoff);
+  const proposalContextDocuments = selectedDocuments.filter(
+    (document) => document.selectedForProposalContext
+  );
+  const humanReviewDocuments = selectedDocuments.filter((document) => document.requiresHumanReview);
   const takeoffItems = currentEstimate?.takeoffItems || [];
   const documentsProgress =
     selectedDocuments.length > 0 ? (analyzedDocuments.length / selectedDocuments.length) * 100 : 0;
@@ -914,14 +1123,54 @@ export function EstimateModule({ className }: { className?: string }) {
     };
   }, [currentEstimate?.id, selectedProject?.id, syncProposal]);
 
+  React.useEffect(() => {
+    const opportunityId = selectedProject?.bidOpportunity?.id || null;
+    const estimateId = currentEstimate?.id || null;
+
+    if (!opportunityId || !estimateId) {
+      setBidFormData(null);
+      setSubmitPackage(null);
+      setBidSubmitTo("");
+      setBidPackageNotes("");
+      setBidSubmitMethod("portal");
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadBidPackage() {
+      setIsLoadingBidForm(true);
+      try {
+        await syncBidForm(opportunityId!, estimateId!);
+      } catch (bidFormError) {
+        if (!cancelled) {
+          toast({
+            title: "Bid form assistant failed",
+            description:
+              bidFormError instanceof Error ? bidFormError.message : "Unknown error",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingBidForm(false);
+        }
+      }
+    }
+
+    void loadBidPackage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEstimate?.id, selectedProject?.bidOpportunity?.id, syncBidForm]);
+
   async function handleCreateProject() {
     try {
-      const userId = activeUser?.id || "default-user";
       const createdProject = await readApi<Project>("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId,
           name: `New Project ${projects.length + 1}`,
           client: "New Client",
         }),
@@ -1008,6 +1257,38 @@ export function EstimateModule({ className }: { className?: string }) {
     }
   }
 
+  async function handleUpdateDocumentSelection(
+    documentId: string,
+    updates: Partial<
+      Pick<
+        Document,
+        "selectedForTakeoff" | "selectedForProposalContext" | "requiresHumanReview" | "selectionReason"
+      >
+    >
+  ) {
+    try {
+      setUpdatingDocumentId(documentId);
+      await readApi<Document>("/api/documents", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: documentId,
+          ...updates,
+        }),
+      });
+
+      await syncProjects(selectedProjectId || undefined);
+    } catch (updateError) {
+      toast({
+        title: "Document selection update failed",
+        description: updateError instanceof Error ? updateError.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setUpdatingDocumentId(null);
+    }
+  }
+
   async function handleGenerateEstimate() {
     if (!selectedProjectId) return;
 
@@ -1018,7 +1299,6 @@ export function EstimateModule({ className }: { className?: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId: selectedProjectId,
-          userId: activeUser?.id || "default-user",
         }),
       });
 
@@ -1048,6 +1328,7 @@ export function EstimateModule({ className }: { className?: string }) {
       recipientEmail: proposalRecipientEmail || undefined,
       intro: proposalIntro,
       scopeSummary: proposalScopeSummary,
+      template: proposalTemplate,
       schedule: proposalSchedule,
       coverNote: proposalCoverNote || undefined,
       inclusions: parseLines(proposalInclusions),
@@ -1090,6 +1371,141 @@ export function EstimateModule({ className }: { className?: string }) {
     }
   }
 
+  function updateBidFormLineItem(itemId: string, patch: Partial<BidFormLineItem>) {
+    setBidFormData((current) => {
+      if (!current) return current;
+
+      return {
+        ...current,
+        lineItems: current.lineItems.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                ...patch,
+                amount:
+                  patch.amount === undefined
+                    ? item.amount
+                    : Number.isFinite(Number(patch.amount))
+                      ? Number(patch.amount)
+                      : 0,
+              }
+            : item
+        ),
+      };
+    });
+  }
+
+  function addBidFormLineItem() {
+    setBidFormData((current) =>
+      current
+        ? {
+            ...current,
+            lineItems: [...current.lineItems, buildBidFormLineItem()],
+          }
+        : current
+    );
+  }
+
+  function removeBidFormLineItem(itemId: string) {
+    setBidFormData((current) => {
+      if (!current) return current;
+
+      const nextItems = current.lineItems.filter((item) => item.id !== itemId);
+      return {
+        ...current,
+        lineItems: nextItems.length ? nextItems : [buildBidFormLineItem()],
+      };
+    });
+  }
+
+  async function handleSaveBidForm() {
+    if (!selectedProject?.bidOpportunity?.id || !currentEstimate?.id || !bidFormData) return false;
+
+    try {
+      setIsSavingBidForm(true);
+      const payload = await readApi<{
+        bidFormData: BidFormData;
+        submitPackage: BidSubmitPackage | null;
+      }>("/api/opportunities/bid-form", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          opportunityId: selectedProject.bidOpportunity.id,
+          estimateId: currentEstimate.id,
+          bidFormData,
+        }),
+      });
+
+      setBidFormData(payload.bidFormData);
+      setSubmitPackage(payload.submitPackage);
+      await syncProjects(selectedProject.id);
+      toast({
+        title: "Bid form saved",
+        description: "The submission form is now stored with the opportunity record.",
+      });
+      return true;
+    } catch (saveError) {
+      toast({
+        title: "Could not save bid form",
+        description: saveError instanceof Error ? saveError.message : "Unknown error",
+        variant: "destructive",
+      });
+      return false;
+    } finally {
+      setIsSavingBidForm(false);
+    }
+  }
+
+  async function handlePrepareBidPackage(action: "prepare" | "markSubmitted" | "markWon" = "prepare") {
+    if (!selectedProject?.bidOpportunity?.id || !currentEstimate?.id || !bidFormData) return;
+
+    try {
+      setIsPreparingBidPackage(true);
+      const payload = await readApi<{
+        bidFormData: BidFormData;
+        submitPackage: BidSubmitPackage;
+      }>("/api/opportunities/submit-package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          opportunityId: selectedProject.bidOpportunity.id,
+          estimateId: currentEstimate.id,
+          action,
+          bidFormData,
+          submitMethod: bidSubmitMethod,
+          submitTo: bidSubmitTo || undefined,
+          notes: bidPackageNotes || undefined,
+        }),
+      });
+
+      setBidFormData(payload.bidFormData);
+      setSubmitPackage(payload.submitPackage);
+      setBidSubmitMethod(payload.submitPackage.submitMethod);
+      setBidSubmitTo(payload.submitPackage.submitTo || "");
+      await syncProjects(selectedProject.id);
+      toast({
+        title:
+          action === "markWon"
+            ? "Bid marked as won"
+            : action === "markSubmitted"
+              ? "Bid marked as submitted"
+              : "Submit package prepared",
+        description:
+          action === "prepare"
+            ? payload.submitPackage.packageSummary
+            : "The opportunity lane and submit package were updated.",
+      });
+    } catch (packageError) {
+      toast({
+        title: "Submit package failed",
+        description: packageError instanceof Error ? packageError.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsPreparingBidPackage(false);
+    }
+  }
+
   async function handleSendProposal() {
     if (!currentEstimate || !selectedProject) return;
 
@@ -1103,23 +1519,31 @@ export function EstimateModule({ className }: { className?: string }) {
         }
       }
 
-      const payload = await readApi<{ attachmentUrl: string }>("/api/proposals/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          estimateId: currentEstimate.id,
-          userId: activeUser?.id || "default-user",
-          recipientName: proposalRecipientName || selectedProject.client,
-          recipientEmail: proposalRecipientEmail || selectedProject.clientEmail,
-          message: proposalMessage || undefined,
-        }),
-      });
+      const payload = await readApi<{ attachmentUrl: string; portalUrl?: string; publicPdfUrl?: string }>(
+        "/api/proposals/send",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            estimateId: currentEstimate.id,
+            recipientName: proposalRecipientName || selectedProject.client,
+            recipientEmail: proposalRecipientEmail || selectedProject.clientEmail,
+            message: proposalMessage || undefined,
+          }),
+        }
+      );
+
+      if (payload.portalUrl && navigator.clipboard) {
+        await navigator.clipboard.writeText(payload.portalUrl).catch(() => undefined);
+      }
 
       await syncProjects(selectedProjectId);
       setActiveTab("proposal");
       toast({
         title: "Proposal sent",
-        description: `Delivery recorded and PDF available at ${payload.attachmentUrl}.`,
+        description: payload.portalUrl
+          ? "Delivery sent and client portal link copied when supported."
+          : `Delivery recorded and PDF available at ${payload.attachmentUrl}.`,
       });
     } catch (sendError) {
       toast({
@@ -1303,6 +1727,43 @@ export function EstimateModule({ className }: { className?: string }) {
                       </Card>
                     ) : null}
 
+                    {selectedProject.bidOpportunity ? (
+                      <Card className="border-slate-800 bg-slate-950/70">
+                        <CardHeader>
+                          <CardTitle className="text-white">Bid Context</CardTitle>
+                          <CardDescription className="text-slate-400">
+                            The document ranker now uses the linked opportunity scope before estimate generation.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 md:grid-cols-4">
+                          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Scope package</p>
+                            <p className="mt-2 text-sm text-white">
+                              {selectedProject.bidOpportunity.scopePackage || "Pending"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Due date</p>
+                            <p className="mt-2 text-sm text-white">
+                              {formatDate(selectedProject.bidOpportunity.dueDate)}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Source</p>
+                            <p className="mt-2 text-sm text-white">
+                              {selectedProject.bidOpportunity.source || "manual-intake"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Bid form</p>
+                            <p className="mt-2 text-sm text-white">
+                              {selectedProject.bidOpportunity.bidFormRequired ? "Required" : "Proposal only"}
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ) : null}
+
                     <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                       <DropZone disabled={isUploading} onDrop={(files) => void handleUploadFiles(files)} />
 
@@ -1323,10 +1784,25 @@ export function EstimateModule({ className }: { className?: string }) {
                               <p className="text-xs uppercase tracking-wide text-slate-500">Analyzed</p>
                               <p className="mt-2 text-2xl font-semibold text-white">{analyzedDocuments.length}</p>
                             </div>
+                            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                              <p className="text-xs uppercase tracking-wide text-slate-500">Takeoff picks</p>
+                              <p className="mt-2 text-2xl font-semibold text-white">
+                                {takeoffCandidateDocuments.length}
+                              </p>
+                            </div>
+                            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+                              <p className="text-xs uppercase tracking-wide text-slate-500">Needs review</p>
+                              <p className="mt-2 text-2xl font-semibold text-white">
+                                {humanReviewDocuments.length}
+                              </p>
+                            </div>
                           </div>
                           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
                             <p className="text-xs uppercase tracking-wide text-slate-500">Latest refresh</p>
                             <p className="mt-2 text-sm text-white">{formatDate(selectedProject.updatedAt)}</p>
+                            <p className="mt-2 text-xs text-slate-500">
+                              {proposalContextDocuments.length} documents are marked as proposal context.
+                            </p>
                           </div>
                           <div className="flex flex-wrap gap-2">
                             <Button
@@ -1339,7 +1815,7 @@ export function EstimateModule({ className }: { className?: string }) {
                               ) : (
                                 <Sparkles className="mr-1.5 h-4 w-4" />
                               )}
-                              Analyze all docs
+                              Analyze and rank docs
                             </Button>
                             <Button
                               variant="outline"
@@ -1361,6 +1837,23 @@ export function EstimateModule({ className }: { className?: string }) {
                             key={document.id}
                             document={document}
                             onAnalyze={() => void handleAnalyzeDocuments([document.id])}
+                            onToggleTakeoff={() =>
+                              void handleUpdateDocumentSelection(document.id, {
+                                selectedForTakeoff: !document.selectedForTakeoff,
+                                selectionReason: document.selectedForTakeoff
+                                  ? "Manually removed from takeoff selection."
+                                  : "Manually selected for takeoff.",
+                              })
+                            }
+                            onToggleProposalContext={() =>
+                              void handleUpdateDocumentSelection(document.id, {
+                                selectedForProposalContext: !document.selectedForProposalContext,
+                                selectionReason: document.selectedForProposalContext
+                                  ? "Removed from proposal context."
+                                  : "Included as proposal context.",
+                              })
+                            }
+                            isUpdating={updatingDocumentId === document.id}
                           />
                         ))}
                       </div>
@@ -1547,6 +2040,25 @@ export function EstimateModule({ className }: { className?: string }) {
                           </div>
 
                           <div className="space-y-2">
+                            <Label className="text-slate-400">Template</Label>
+                            <Select
+                              value={proposalTemplate}
+                              onValueChange={(value) =>
+                                setProposalTemplate(value as ProposalData["template"])
+                              }
+                            >
+                              <SelectTrigger className="border-slate-800 bg-slate-900 text-slate-200">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="border-slate-800 bg-slate-900 text-slate-200">
+                                <SelectItem value="residential">Residential</SelectItem>
+                                <SelectItem value="commercial">Commercial</SelectItem>
+                                <SelectItem value="tenant-improvement">Tenant improvement</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
                             <Label className="text-slate-400">Schedule</Label>
                             <Textarea
                               value={proposalSchedule}
@@ -1625,6 +2137,446 @@ export function EstimateModule({ className }: { className?: string }) {
                           </CardContent>
                         </Card>
 
+                        <Card className="border-slate-800 bg-slate-950/70">
+                          <CardHeader>
+                            <CardTitle className="text-white">Delivery Tracking</CardTitle>
+                            <CardDescription className="text-slate-400">
+                              Portal status and client response once the proposal is sent.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="grid gap-3 md:grid-cols-2">
+                            {[
+                              ["Status", currentEstimate?.proposalDelivery?.status || "Not sent"],
+                              ["Sent", formatDate(currentEstimate?.proposalDelivery?.sentAt)],
+                              ["Viewed", formatDate(currentEstimate?.proposalDelivery?.viewedAt)],
+                              [
+                                "Response",
+                                currentEstimate?.proposalDelivery?.approvedAt
+                                  ? `Approved • ${formatDate(currentEstimate.proposalDelivery.approvedAt)}`
+                                  : currentEstimate?.proposalDelivery?.rejectedAt
+                                    ? `Rejected • ${formatDate(currentEstimate.proposalDelivery.rejectedAt)}`
+                                    : "Pending",
+                              ],
+                            ].map(([label, value]) => (
+                              <div
+                                key={label}
+                                className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
+                              >
+                                <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+                                <p className="mt-2 text-sm text-white">{value}</p>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+
+                        {selectedProject.bidOpportunity ? (
+                          <Card className="border-slate-800 bg-slate-950/70">
+                            <CardHeader>
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <CardTitle className="text-white">Bid Form Assistant</CardTitle>
+                                  <CardDescription className="text-slate-400">
+                                    Structure the client bid form and prepare the final submit package.
+                                  </CardDescription>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    variant="outline"
+                                    className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                    onClick={() => void handleSaveBidForm()}
+                                    disabled={!bidFormData || isSavingBidForm}
+                                  >
+                                    {isSavingBidForm ? (
+                                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Save className="mr-1.5 h-4 w-4" />
+                                    )}
+                                    Save bid form
+                                  </Button>
+                                  {submitPackage?.bidFormPdfUrl ? (
+                                    <Button
+                                      asChild
+                                      variant="outline"
+                                      className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                    >
+                                      <a
+                                        href={submitPackage.bidFormPdfUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        <Download className="mr-1.5 h-4 w-4" />
+                                        Open bid form PDF
+                                      </a>
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="space-y-5">
+                              {isLoadingBidForm ? (
+                                <div className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300">
+                                  <Loader2 className="h-4 w-4 animate-spin text-orange-400" />
+                                  Loading bid form assistant...
+                                </div>
+                              ) : bidFormData ? (
+                                <>
+                                  <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Bidder company</Label>
+                                      <Input
+                                        value={bidFormData.bidderCompany}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? { ...current, bidderCompany: event.target.value }
+                                              : current
+                                          )
+                                        }
+                                        className="border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Bidder contact</Label>
+                                      <Input
+                                        value={bidFormData.bidderContact || ""}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? { ...current, bidderContact: event.target.value }
+                                              : current
+                                          )
+                                        }
+                                        className="border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Bidder email</Label>
+                                      <Input
+                                        type="email"
+                                        value={bidFormData.bidderEmail || ""}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? { ...current, bidderEmail: event.target.value }
+                                              : current
+                                          )
+                                        }
+                                        className="border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Bidder phone</Label>
+                                      <Input
+                                        value={bidFormData.bidderPhone || ""}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? { ...current, bidderPhone: event.target.value }
+                                              : current
+                                          )
+                                        }
+                                        className="border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                        <p className="text-sm font-medium text-white">Bid form line items</p>
+                                        <p className="text-xs text-slate-500">
+                                          Build the exact pricing rows you want on the client form.
+                                        </p>
+                                      </div>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                        onClick={addBidFormLineItem}
+                                      >
+                                        <Plus className="mr-1.5 h-4 w-4" />
+                                        Add line
+                                      </Button>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                      {bidFormData.lineItems.map((item, index) => (
+                                        <div
+                                          key={item.id}
+                                          className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"
+                                        >
+                                          <div className="grid gap-4 md:grid-cols-[1.2fr_0.45fr_auto]">
+                                            <div className="space-y-2">
+                                              <Label className="text-slate-400">
+                                                Line item {index + 1}
+                                              </Label>
+                                              <Input
+                                                value={item.label}
+                                                onChange={(event) =>
+                                                  updateBidFormLineItem(item.id, {
+                                                    label: event.target.value,
+                                                  })
+                                                }
+                                                className="border-slate-800 bg-slate-950 text-slate-200"
+                                                placeholder="Base bid"
+                                              />
+                                            </div>
+                                            <div className="space-y-2">
+                                              <Label className="text-slate-400">Amount</Label>
+                                              <Input
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                value={item.amount}
+                                                onChange={(event) =>
+                                                  updateBidFormLineItem(item.id, {
+                                                    amount: Number(event.target.value || 0),
+                                                  })
+                                                }
+                                                className="border-slate-800 bg-slate-950 text-slate-200"
+                                              />
+                                            </div>
+                                            <div className="flex items-end">
+                                              <Button
+                                                type="button"
+                                                variant="outline"
+                                                className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                                onClick={() => removeBidFormLineItem(item.id)}
+                                              >
+                                                <Trash2 className="mr-1.5 h-4 w-4" />
+                                                Remove
+                                              </Button>
+                                            </div>
+                                          </div>
+
+                                          <div className="mt-4 space-y-2">
+                                            <Label className="text-slate-400">Line notes</Label>
+                                            <Textarea
+                                              value={item.notes || ""}
+                                              onChange={(event) =>
+                                                updateBidFormLineItem(item.id, {
+                                                  notes: event.target.value,
+                                                })
+                                              }
+                                              className="min-h-[80px] border-slate-800 bg-slate-950 text-slate-200"
+                                              placeholder="Alternates, clarifications or notes for this row"
+                                            />
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="grid gap-4 md:grid-cols-3">
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Alternates</Label>
+                                      <Textarea
+                                        value={normalizeLines(bidFormData.alternates)}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? {
+                                                  ...current,
+                                                  alternates: parseLines(event.target.value),
+                                                }
+                                              : current
+                                          )
+                                        }
+                                        className="min-h-[130px] border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Attachments</Label>
+                                      <Textarea
+                                        value={normalizeLines(bidFormData.attachments)}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current
+                                              ? {
+                                                  ...current,
+                                                  attachments: parseLines(event.target.value),
+                                                }
+                                              : current
+                                          )
+                                        }
+                                        className="min-h-[130px] border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Bid notes</Label>
+                                      <Textarea
+                                        value={bidFormData.notes || ""}
+                                        onChange={(event) =>
+                                          setBidFormData((current) =>
+                                            current ? { ...current, notes: event.target.value } : current
+                                          )
+                                        }
+                                        className="min-h-[130px] border-slate-800 bg-slate-900 text-slate-200"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Submit method</Label>
+                                      <Select
+                                        value={bidSubmitMethod}
+                                        onValueChange={(value) =>
+                                          setBidSubmitMethod(value as BidSubmitPackage["submitMethod"])
+                                        }
+                                      >
+                                        <SelectTrigger className="border-slate-800 bg-slate-900 text-slate-200">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent className="border-slate-800 bg-slate-900 text-slate-200">
+                                          <SelectItem value="portal">Portal</SelectItem>
+                                          <SelectItem value="email">Email</SelectItem>
+                                          <SelectItem value="manual">Manual</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label className="text-slate-400">Submit to</Label>
+                                      <Input
+                                        value={bidSubmitTo}
+                                        onChange={(event) => setBidSubmitTo(event.target.value)}
+                                        className="border-slate-800 bg-slate-900 text-slate-200"
+                                        placeholder="Portal URL or recipient email"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <Label className="text-slate-400">Submit package notes</Label>
+                                    <Textarea
+                                      value={bidPackageNotes}
+                                      onChange={(event) => setBidPackageNotes(event.target.value)}
+                                      className="min-h-[100px] border-slate-800 bg-slate-900 text-slate-200"
+                                      placeholder="Internal submit notes, reminders or portal steps"
+                                    />
+                                  </div>
+
+                                  <div className="flex flex-wrap gap-2">
+                                    <Button
+                                      onClick={() => void handlePrepareBidPackage("prepare")}
+                                      disabled={isPreparingBidPackage}
+                                      className="bg-orange-500 text-white hover:bg-orange-600"
+                                    >
+                                      {isPreparingBidPackage ? (
+                                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+                                      )}
+                                      Prepare package
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                      onClick={() => void handlePrepareBidPackage("markSubmitted")}
+                                      disabled={isPreparingBidPackage}
+                                    >
+                                      Mark submitted
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                      onClick={() => void handlePrepareBidPackage("markWon")}
+                                      disabled={isPreparingBidPackage}
+                                    >
+                                      Mark won
+                                    </Button>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-4 text-sm text-slate-500">
+                                  No bid form context available yet.
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        ) : null}
+
+                        {selectedProject.bidOpportunity && submitPackage ? (
+                          <Card className="border-slate-800 bg-slate-950/70">
+                            <CardHeader>
+                              <CardTitle className="text-white">Submit Package Readiness</CardTitle>
+                              <CardDescription className="text-slate-400">
+                                Review the package before portal submission or manual send.
+                              </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                              <div className="grid gap-3 md:grid-cols-3">
+                                {[
+                                  ["Status", submitPackage.status],
+                                  ["Method", submitPackage.submitMethod],
+                                  ["Destination", submitPackage.submitTo || "Pending"],
+                                ].map(([label, value]) => (
+                                  <div
+                                    key={label}
+                                    className="rounded-xl border border-slate-800 bg-slate-900/70 p-4"
+                                  >
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+                                    <p className="mt-2 text-sm text-white">{value}</p>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                                <p className="text-sm font-medium text-white">Package summary</p>
+                                <p className="mt-2 text-sm leading-6 text-slate-400">
+                                  {submitPackage.packageSummary}
+                                </p>
+                              </div>
+
+                              <div className="space-y-2">
+                                {submitPackage.checklist.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
+                                  >
+                                    {item.done ? (
+                                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
+                                    ) : (
+                                      <AlertCircle className="mt-0.5 h-4 w-4 text-amber-400" />
+                                    )}
+                                    <div>
+                                      <p className="text-sm font-medium text-white">{item.label}</p>
+                                      <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="flex flex-wrap gap-2">
+                                {submitPackage.proposalPdfUrl ? (
+                                  <Button
+                                    asChild
+                                    variant="outline"
+                                    className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                  >
+                                    <a href={submitPackage.proposalPdfUrl} target="_blank" rel="noreferrer">
+                                      <Download className="mr-1.5 h-4 w-4" />
+                                      Proposal PDF
+                                    </a>
+                                  </Button>
+                                ) : null}
+                                {submitPackage.bidFormPdfUrl ? (
+                                  <Button
+                                    asChild
+                                    variant="outline"
+                                    className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                                  >
+                                    <a href={submitPackage.bidFormPdfUrl} target="_blank" rel="noreferrer">
+                                      <Download className="mr-1.5 h-4 w-4" />
+                                      Bid Form PDF
+                                    </a>
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ) : null}
+
                         <ProposalDraft
                           project={selectedProject}
                           estimate={currentEstimate}
@@ -1636,6 +2588,7 @@ export function EstimateModule({ className }: { className?: string }) {
                                   recipientEmail: proposalRecipientEmail || undefined,
                                   intro: proposalIntro,
                                   scopeSummary: proposalScopeSummary,
+                                  template: proposalTemplate,
                                   schedule: proposalSchedule,
                                   coverNote: proposalCoverNote || undefined,
                                   inclusions: parseLines(proposalInclusions),

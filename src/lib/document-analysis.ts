@@ -1,8 +1,6 @@
-import { access, readFile } from "fs/promises";
-import path from "path";
-import { constants } from "fs";
 import type { Document as PrismaDocument } from "@prisma/client";
 import { parseJsonField } from "@/lib/json";
+import { loadStoredFileBuffer } from "@/lib/storage";
 
 export interface QuantitySignal {
   label: string;
@@ -26,6 +24,12 @@ export interface DocumentAnalysis {
   confidence: number;
   trade: string;
   category: string;
+  relevanceScore: number;
+  selectedForTakeoff: boolean;
+  selectedForProposalContext: boolean;
+  requiresHumanReview: boolean;
+  selectionReason: string;
+  matchedScopeTerms: string[];
   summary: string;
   pageCount: number;
   extractedTextLength: number;
@@ -35,6 +39,36 @@ export interface DocumentAnalysis {
   takeoffItems: TakeoffSeed[];
   textPreview: string;
 }
+
+export interface DocumentAnalysisContext {
+  projectName?: string;
+  client?: string;
+  address?: string;
+  opportunityName?: string;
+  scopePackage?: string;
+  description?: string;
+  tradeInstructions?: string;
+  bidFormRequired?: boolean;
+  addendas?: string[];
+  internalNotes?: string;
+}
+
+type ProjectDocumentContextSource = {
+  name?: string | null;
+  client?: string | null;
+  address?: string | null;
+  bidOpportunity?: {
+    name?: string | null;
+    scopePackage?: string | null;
+    description?: string | null;
+    tradeInstructions?: string | null;
+    bidFormRequired?: boolean | null;
+  } | null;
+  projectMemory?: {
+    addendas?: string | null;
+    notes?: string | null;
+  } | null;
+};
 
 type TradeProfile = {
   trade: string;
@@ -166,6 +200,29 @@ function normalizeUnit(rawUnit: string) {
   return rawUnit.toUpperCase();
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeTradeKey(value?: string | null) {
+  return value?.toLowerCase().trim().replace(/\s+/g, "-") || "general";
+}
+
+function getCategoryWeight(category: string) {
+  switch (category) {
+    case "plan":
+      return 22;
+    case "addenda":
+      return 16;
+    case "spec":
+      return 14;
+    case "contract":
+      return 8;
+    default:
+      return 10;
+  }
+}
+
 function extractKeywords(text: string) {
   const words = normalizeText(text)
     .split(/[^a-z0-9#.-]+/)
@@ -282,6 +339,124 @@ function scoreCategory(text: string) {
   };
 }
 
+export function buildDocumentAnalysisContext(
+  project: ProjectDocumentContextSource
+): DocumentAnalysisContext {
+  return {
+    projectName: project.name || undefined,
+    client: project.client || undefined,
+    address: project.address || undefined,
+    opportunityName: project.bidOpportunity?.name || undefined,
+    scopePackage: project.bidOpportunity?.scopePackage || undefined,
+    description: project.bidOpportunity?.description || undefined,
+    tradeInstructions: project.bidOpportunity?.tradeInstructions || undefined,
+    bidFormRequired: Boolean(project.bidOpportunity?.bidFormRequired),
+    addendas: parseJsonField<string[]>(project.projectMemory?.addendas, []),
+    internalNotes: project.projectMemory?.notes || undefined,
+  };
+}
+
+function scoreDocumentRelevance({
+  sourceText,
+  detectedTrade,
+  detectedCategory,
+  confidence,
+  quantitySignals,
+  detectedSheets,
+  context,
+}: {
+  sourceText: string;
+  detectedTrade: string;
+  detectedCategory: string;
+  confidence: number;
+  quantitySignals: QuantitySignal[];
+  detectedSheets: string[];
+  context?: DocumentAnalysisContext;
+}) {
+  const normalizedSource = normalizeText(sourceText);
+  const contextText = context
+    ? [
+        context.projectName,
+        context.client,
+        context.address,
+        context.opportunityName,
+        context.scopePackage,
+        context.description,
+        context.tradeInstructions,
+        context.internalNotes,
+        ...(context.addendas || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : "";
+  const normalizedContext = normalizeText(contextText);
+  const matchedScopeTerms = normalizedContext
+    ? extractKeywords(contextText).filter((term) => normalizedSource.includes(term)).slice(0, 6)
+    : [];
+  const contextTrade = normalizedContext ? scoreTrade(contextText).profile.trade : null;
+  const tradeMatch = contextTrade
+    ? normalizeTradeKey(contextTrade) === normalizeTradeKey(detectedTrade)
+    : false;
+
+  let score = 18;
+  score += getCategoryWeight(detectedCategory);
+  score += Math.min(quantitySignals.length * 6, 18);
+  score += Math.min(detectedSheets.length * 4, 12);
+  score += Math.min(matchedScopeTerms.length * 7, 28);
+  score += Math.round(confidence * 15);
+
+  if (tradeMatch) {
+    score += 14;
+  }
+
+  if (detectedCategory === "contract" && !context?.bidFormRequired) {
+    score -= 8;
+  }
+
+  if (detectedCategory === "addenda") {
+    score += 4;
+  }
+
+  const relevanceScore = clamp(Math.round(score), 0, 100);
+  const selectedForTakeoff =
+    (detectedCategory === "plan" && relevanceScore >= 52) ||
+    (tradeMatch && relevanceScore >= 48) ||
+    (detectedCategory === "spec" && relevanceScore >= 68 && quantitySignals.length > 0) ||
+    (detectedCategory === "addenda" && relevanceScore >= 62);
+  const selectedForProposalContext =
+    relevanceScore >= 40 &&
+    ["plan", "spec", "addenda", "contract"].includes(detectedCategory);
+  const requiresHumanReview =
+    confidence < 0.58 ||
+    (relevanceScore >= 45 && relevanceScore < 60) ||
+    detectedCategory === "addenda" ||
+    (Boolean(context?.bidFormRequired) && detectedCategory === "contract");
+
+  const reasons = [
+    tradeMatch ? `Matched bid trade ${contextTrade}` : null,
+    matchedScopeTerms.length ? `Scope terms: ${matchedScopeTerms.join(", ")}` : null,
+    quantitySignals.length ? `${quantitySignals.length} measurable quantities detected` : null,
+    detectedSheets.length ? `${detectedSheets.length} sheet references found` : null,
+    detectedCategory === "addenda" ? "Addenda should be reviewed before pricing" : null,
+    Boolean(context?.bidFormRequired) && detectedCategory === "contract"
+      ? "Bid form context may affect proposal formatting"
+      : null,
+  ].filter(Boolean);
+
+  return {
+    relevanceScore,
+    selectedForTakeoff,
+    selectedForProposalContext,
+    requiresHumanReview,
+    selectionReason:
+      reasons[0] ||
+      (selectedForTakeoff
+        ? "Selected for takeoff based on category and scoring."
+        : "Kept as supporting context only."),
+    matchedScopeTerms,
+  };
+}
+
 function buildTakeoffItems({
   analysisTrade,
   quantitySignals,
@@ -319,18 +494,9 @@ function buildTakeoffItems({
   }));
 }
 
-async function fileExists(filePath: string) {
-  try {
-    await access(filePath, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function extractPdfTextFromFile(filePath: string) {
+async function extractPdfTextFromBuffer(buffer: Buffer) {
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const data = new Uint8Array(await readFile(filePath));
+  const data = new Uint8Array(buffer);
   const pdf = await getDocument({ data }).promise;
   const textChunks: string[] = [];
 
@@ -361,34 +527,36 @@ async function extractPdfTextFromFile(filePath: string) {
   }
 }
 
-function resolvePublicPath(filePath: string) {
-  if (!filePath) return null;
-
-  if (path.isAbsolute(filePath)) {
-    return filePath;
-  }
-
-  const normalized = filePath.replace(/^\/+/, "");
-  return path.join(process.cwd(), "public", normalized);
-}
-
 export async function analyzeStoredDocument(
   document: Pick<
     PrismaDocument,
-    "id" | "name" | "originalName" | "type" | "path" | "trade" | "category" | "analysisResult"
-  >
+    | "id"
+    | "name"
+    | "originalName"
+    | "type"
+    | "path"
+    | "trade"
+    | "category"
+    | "analysisResult"
+    | "selectedForTakeoff"
+    | "selectedForProposalContext"
+    | "requiresHumanReview"
+    | "selectionReason"
+    | "relevanceScore"
+  >,
+  context?: DocumentAnalysisContext
 ) {
   const fileName = document.originalName || document.name;
-  const absolutePath = resolvePublicPath(document.path);
   const existingAnalysis = parseJsonField<DocumentAnalysis | null>(document.analysisResult, null);
 
   let pageCount = existingAnalysis?.pageCount || 0;
   let extractedText = "";
   let source: DocumentAnalysis["source"] = "metadata";
 
-  if (document.type.includes("pdf") && absolutePath && (await fileExists(absolutePath))) {
+  if (document.type.includes("pdf") && document.path) {
     try {
-      const extracted = await extractPdfTextFromFile(absolutePath);
+      const buffer = await loadStoredFileBuffer(document.path);
+      const extracted = await extractPdfTextFromBuffer(buffer);
       pageCount = extracted.pageCount;
       extractedText = extracted.text;
       source = extracted.text ? "pdf-text" : "metadata";
@@ -415,6 +583,15 @@ export async function analyzeStoredDocument(
     fileName,
   });
   const confidence = Math.min(0.98, 0.45 + (tradeScore + categoryScore) * 0.04);
+  const relevance = scoreDocumentRelevance({
+    sourceText,
+    detectedTrade,
+    detectedCategory,
+    confidence,
+    quantitySignals,
+    detectedSheets,
+    context,
+  });
 
   const summary = [
     `${fileName} classified as ${detectedTrade} ${detectedCategory}.`,
@@ -422,6 +599,7 @@ export async function analyzeStoredDocument(
     quantitySignals.length
       ? `${quantitySignals.length} measurable quantity signals detected.`
       : "Fallback takeoff assumptions prepared from document keywords.",
+    `${relevance.selectionReason} Score ${relevance.relevanceScore}/100.`,
   ].join(" ");
 
   const analysis: DocumentAnalysis = {
@@ -429,6 +607,12 @@ export async function analyzeStoredDocument(
     confidence: Number(confidence.toFixed(2)),
     trade: detectedTrade,
     category: detectedCategory,
+    relevanceScore: relevance.relevanceScore,
+    selectedForTakeoff: relevance.selectedForTakeoff,
+    selectedForProposalContext: relevance.selectedForProposalContext,
+    requiresHumanReview: relevance.requiresHumanReview,
+    selectionReason: relevance.selectionReason,
+    matchedScopeTerms: relevance.matchedScopeTerms,
     summary,
     pageCount,
     extractedTextLength: extractedText.length,
@@ -444,6 +628,11 @@ export async function analyzeStoredDocument(
     category: detectedCategory,
     pageNumber: pageCount || null,
     analyzed: true,
+    relevanceScore: relevance.relevanceScore,
+    selectedForTakeoff: relevance.selectedForTakeoff,
+    selectedForProposalContext: relevance.selectedForProposalContext,
+    requiresHumanReview: relevance.requiresHumanReview,
+    selectionReason: relevance.selectionReason,
     analysisResult: analysis,
   };
 }

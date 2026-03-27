@@ -35,6 +35,9 @@ if errorlevel 1 exit /b 1
 echo ==========================================
 echo Preparando base de datos...
 echo ==========================================
+call npm run check:env
+if errorlevel 1 exit /b 1
+
 call npm run db:generate
 if errorlevel 1 exit /b 1
 

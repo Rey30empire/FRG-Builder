@@ -1,19 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeEstimate } from "@/lib/api-serializers";
+import { canAccessEstimate, canAccessProject } from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get("projectId");
     const estimateId = searchParams.get("estimateId");
 
     if (estimateId) {
+      if (!(await canAccessEstimate(auth.user, estimateId))) {
+        return NextResponse.json(
+          { success: false, error: "Estimate not found or access denied" },
+          { status: 404 }
+        );
+      }
+
       const estimate = await db.estimate.findUnique({
         where: { id: estimateId },
         include: {
           takeoffItems: true,
           emails: true,
+          proposalDelivery: true,
         },
       });
       return NextResponse.json({
@@ -29,11 +42,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (!(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
+
     const estimates = await db.estimate.findMany({
       where: { projectId },
       include: {
         takeoffItems: true,
         emails: true,
+        proposalDelivery: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -53,6 +74,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
     const {
       projectId,
@@ -62,7 +86,9 @@ export async function POST(request: NextRequest) {
       equipmentCost,
       duration,
       weatherFactor,
+      marketFactor,
       riskFactor,
+      regionalContext,
       takeoffItems,
     } = body;
 
@@ -70,6 +96,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Project ID and name are required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -100,7 +133,14 @@ export async function POST(request: NextRequest) {
         total,
         duration,
         weatherFactor,
+        marketFactor,
         riskFactor,
+        regionalContext:
+          regionalContext === undefined
+            ? undefined
+            : typeof regionalContext === "string"
+              ? regionalContext
+              : JSON.stringify(regionalContext),
         takeoffItems: takeoffItems
           ? {
               create: takeoffItems.map(
@@ -128,6 +168,7 @@ export async function POST(request: NextRequest) {
       include: {
         takeoffItems: true,
         emails: true,
+        proposalDelivery: true,
       },
     });
 
@@ -146,13 +187,23 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id, status, ...updates } = body;
+    const { id, projectId: _projectId, ...updates } = body;
 
     if (!id) {
       return NextResponse.json(
         { success: false, error: "Estimate ID is required" },
         { status: 400 }
+      );
+    }
+
+    if (!(await canAccessEstimate(auth.user, id))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
       );
     }
 
@@ -171,12 +222,17 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    if (updates.regionalContext !== undefined && typeof updates.regionalContext !== "string") {
+      updates.regionalContext = JSON.stringify(updates.regionalContext);
+    }
+
     const estimate = await db.estimate.update({
       where: { id },
       data: updates,
       include: {
         takeoffItems: true,
         emails: true,
+        proposalDelivery: true,
       },
     });
 

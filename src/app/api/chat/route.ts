@@ -1,14 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { canAccessConversation, canAccessProject, resolveScopedUserId } from "@/lib/access-control";
+import {
+  buildAgentInstructions,
+  buildProjectContextPrompt,
+  createConversationListTitle,
+  generateAgentReply,
+  getAiSettingsResponse,
+  getProjectContext,
+  runCustomConfiguredAgent,
+  runSafeAgentAction,
+} from "@/lib/agent-core";
+import { requireSessionUser } from "@/lib/auth";
+import {
+  assertBillingLimit,
+  BillingLimitError,
+  canUsePipelineAutomationForAccount,
+  ensureBillingAccount,
+  recordBillingUsage,
+} from "@/lib/billing";
+import { detectCustomAgentMatch, loadUserCustomAgents } from "@/lib/custom-agents";
 import { db } from "@/lib/db";
-import type { SkillName } from "@/types";
-import { DEFAULT_USER_ID, ensureDefaultUser } from "@/lib/default-user";
+import { getToolAccess, resolveEnabledSkill } from "@/lib/permissions";
+import { enforceRateLimit } from "@/lib/rate-limit";
+import { normalizeAgentWorkspaceConfig, shouldAutoRunOrchestrator } from "@/lib/user-workspace";
+import type { AgentSafeAction, Module, SkillName, ToolName } from "@/types";
 
-// Skill Router - Determina qué skill usar basado en el mensaje
+function getActionTool(action: AgentSafeAction): ToolName {
+  if (action === "create_estimate_draft") return "create_estimate_draft";
+  if (action === "generate_follow_up") return "generate_follow_up";
+  if (action === "summarize_documents") return "summarize_documents";
+  if (action === "run_project_orchestrator") return "run_project_orchestrator";
+  return "explain_takeoff";
+}
+
 function detectSkill(message: string): SkillName {
   const lowerMessage = message.toLowerCase();
 
-  // Estimate skills
   if (
     lowerMessage.includes("estim") ||
     lowerMessage.includes("costo") ||
@@ -30,8 +57,6 @@ function detectSkill(message: string): SkillName {
   ) {
     return "plan_reader_skill";
   }
-
-  // Learn skills
   if (
     lowerMessage.includes("explic") ||
     lowerMessage.includes("enseñ") ||
@@ -49,8 +74,6 @@ function detectSkill(message: string): SkillName {
   ) {
     return "code_reference_skill";
   }
-
-  // Boost skills
   if (
     lowerMessage.includes("marketing") ||
     lowerMessage.includes("contenido") ||
@@ -80,8 +103,6 @@ function detectSkill(message: string): SkillName {
   ) {
     return "crm_skill";
   }
-
-  // Agent skills
   if (
     lowerMessage.includes("proyecto") ||
     lowerMessage.includes("organizar") ||
@@ -104,135 +125,339 @@ function detectSkill(message: string): SkillName {
     return "image_analysis_skill";
   }
 
-  // Default
   return "construction_teacher_skill";
 }
 
-// System prompts por skill
 const SKILL_PROMPTS: Record<SkillName, string> = {
-  estimate_skill: `Eres un experto en estimaciones de construcción. Ayudas a calcular costos de materiales, mano de obra, equipos, tiempos y riesgos. Proporciona desgloses detallados y consejos para mejorar la precisión de las estimaciones. Responde en español.`,
-
-  takeoff_skill: `Eres un especialista en takeoff de construcción. Ayudas a extraer cantidades de planos y documentos. Explica cómo medir diferentes elementos (sf, lf, ea, etc.) y cómo interpretar planos arquitectónicos y estructurales. Responde en español.`,
-
-  plan_reader_skill: `Eres un experto en lectura de planos de construcción. Ayudas a interpretar planos arquitectónicos, estructurales, MEP, y de especialidades. Clasificas documentos y identifies trades relevantes. Responde en español.`,
-
-  construction_teacher_skill: `Eres un profesor experto en construcción. Explicas procesos paso a paso, desde conceptos básicos hasta avanzados. Usas ejemplos prácticos y analogías para facilitar el aprendizaje. Adaptas tu explicación al nivel del usuario. Responde en español.`,
-
-  code_reference_skill: `Eres un consultor de códigos de construcción. Conoces IBC, IRC, NEC, y normativas locales. Ayudas a interpretar requisitos y aplicarlos correctamente. Responde en español.`,
-
-  marketing_skill: `Eres un especialista en marketing para contratistas. Ayudas a crear contenido, campañas, y estrategias para conseguir clientes. Conoces el mercado de construcción y remodelación. Responde en español.`,
-
-  proposal_writer_skill: `Eres un experto en redacción de propuestas comerciales. Creas documentos profesionales, persuasivos y claros. Incluyes scope, exclusiones, términos y condiciones apropiados. Responde en español.`,
-
-  email_outreach_skill: `Eres un especialista en comunicación comercial. Redactas correos efectivos para follow-up, cold outreach, y relaciones con clientes. Tu tono es profesional pero cercano. Responde en español.`,
-
-  crm_skill: `Eres un experto en gestión de clientes. Ayudas a organizar leads, programar seguimientos, y mantener relaciones comerciales. Sugieres mejores prácticas para CRM. Responde en español.`,
-
-  project_manager_skill: `Eres un gerente de proyectos de construcción. Ayudas a organizar tareas, cronogramas, y recursos. Sugieres metodologías y herramientas para gestión efectiva. Responde en español.`,
-
-  document_skill: `Eres un especialista en gestión documental. Procesas PDFs, extraes información, y organizas archivos de proyecto. Responde en español.`,
-
-  image_analysis_skill: `Eres un analista de imágenes de construcción. Interpretas planos escaneados, fotos de sitio, y documentos visuales. Extraes información relevante para estimaciones. Responde en español.`,
-
-  local_model_skill: `Eres un asistente de construcción especializado. Responde de manera concisa y directa. Responde en español.`,
+  estimate_skill:
+    "Eres un experto en estimaciones de construccion. Ayudas a calcular costos, mano de obra, equipos, tiempos, riesgo y estrategia de pricing. Responde en espanol y con estructura clara.",
+  takeoff_skill:
+    "Eres un especialista en takeoff de construccion. Explica como medir y validar cantidades desde planos y especificaciones. Responde en espanol.",
+  plan_reader_skill:
+    "Eres un experto en lectura de planos y documentos de construccion. Resume sets, clasifica trades y destaca informacion accionable. Responde en espanol.",
+  construction_teacher_skill:
+    "Eres un profesor experto en construccion. Explica paso a paso con lenguaje claro, practico y profesional. Responde en espanol.",
+  code_reference_skill:
+    "Eres un consultor de codigos de construccion. Ayudas a interpretar requisitos y riesgos de cumplimiento. Responde en espanol.",
+  marketing_skill:
+    "Eres un especialista en marketing para contratistas. Propones copy, campanas y seguimiento comercial accionable. Responde en espanol.",
+  proposal_writer_skill:
+    "Eres un experto en proposals y propuestas comerciales. Priorizas claridad, scope, exclusiones, schedule y proximo paso. Responde en espanol.",
+  email_outreach_skill:
+    "Eres un especialista en follow-up y outreach comercial. Redactas correos claros, breves y persuasivos. Responde en espanol.",
+  crm_skill:
+    "Eres un experto en CRM para contractors. Ayudas a mover oportunidades, planear follow-ups y cerrar mejor. Responde en espanol.",
+  project_manager_skill:
+    "Eres un project manager de construccion. Organiza tareas, prioridades, timeline y dependencias. Responde en espanol.",
+  document_skill:
+    "Eres un especialista en gestion documental de proyectos. Resumes PDFs, detectas gaps y propones proximos pasos. Responde en espanol.",
+  image_analysis_skill:
+    "Eres un analista de imagenes y planos escaneados para construccion. Responde en espanol.",
+  local_model_skill:
+    "Eres un asistente de construccion especializado. Responde de manera concisa y util en espanol.",
 };
+
+function getActionPrompt(action: AgentSafeAction) {
+  switch (action) {
+    case "create_estimate_draft":
+      return "Create a new estimate draft using the active project context.";
+    case "generate_follow_up":
+      return "Generate a follow-up draft using the active project and estimate context.";
+    case "summarize_documents":
+      return "Summarize the active project's documents and highlight the next review items.";
+    case "explain_takeoff":
+      return "Explain the current takeoff and breakdown in plain language.";
+    case "run_project_orchestrator":
+      return "Analyze the active project intake, review the documents, generate the estimate, and leave everything ready for review.";
+    default:
+      return "Run a safe agent action.";
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { message, conversationId, userId, projectId, module } = body;
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
 
-    if (!message) {
+    const limited = enforceRateLimit(
+      request,
+      "chat-message",
+      {
+        windowMs: 1000 * 60,
+        max: 30,
+      },
+      auth.user.id
+    );
+    if (limited) return limited;
+
+    const body = await request.json();
+    const {
+      message,
+      conversationId,
+      projectId: requestedProjectId,
+      module,
+      action,
+    } = body as {
+      message?: string;
+      conversationId?: string;
+      projectId?: string;
+      module?: Module;
+      action?: AgentSafeAction;
+    };
+    const workspace = normalizeAgentWorkspaceConfig(auth.user.userMemory?.agentWorkspaceConfig);
+    const autoOrchestrate =
+      !action &&
+      Boolean(requestedProjectId) &&
+      typeof message === "string" &&
+      shouldAutoRunOrchestrator(message, workspace);
+    const effectiveAction = action || (autoOrchestrate ? "run_project_orchestrator" : undefined);
+
+    if (!message && !effectiveAction) {
       return NextResponse.json(
-        { success: false, error: "Message is required" },
+        { success: false, error: "Message or action is required" },
         { status: 400 }
       );
     }
 
-    // Detect skill
-    const skill = detectSkill(message);
-    const systemPrompt = SKILL_PROMPTS[skill];
+    let billingAccount: Awaited<ReturnType<typeof ensureBillingAccount>> | null = null;
 
-    // Initialize AI
-    const zai = await ZAI.create();
+    if (effectiveAction) {
+      const actionTool = getActionTool(effectiveAction);
+      const toolAccess = await getToolAccess(auth.user, actionTool);
+      if (!toolAccess.allowed) {
+        return NextResponse.json(
+          { success: false, error: toolAccess.reason || "This action is not allowed" },
+          { status: 403 }
+        );
+      }
 
-    // Build messages array
-    let conversationHistory: Array<{ role: string; content: string }> = [];
-
-    // Load conversation history if exists
-    if (conversationId) {
-      const messages = await db.message.findMany({
-        where: { conversationId },
-        orderBy: { createdAt: "asc" },
-        take: 20, // Limit context
-      });
-      conversationHistory = messages.map((m) => ({
-        role: m.role as "user" | "assistant" | "system",
-        content: m.content,
-      }));
+      if (
+        effectiveAction === "run_project_orchestrator" &&
+        !canUsePipelineAutomationForAccount(
+          (billingAccount ||= await ensureBillingAccount(auth.user.id))
+        )
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "The automatic bid pipeline requires an active Pro or Growth plan.",
+          },
+          { status: 403 }
+        );
+      }
     }
 
-    // Create or get conversation
-    let conversation;
+    let conversation = null as Awaited<ReturnType<typeof db.conversation.findUnique>> | null;
+    let projectId = requestedProjectId || null;
+    let conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+
     if (conversationId) {
+      if (!(await canAccessConversation(auth.user, conversationId))) {
+        return NextResponse.json(
+          { success: false, error: "Conversation not found or access denied" },
+          { status: 404 }
+        );
+      }
+
       conversation = await db.conversation.findUnique({
         where: { id: conversationId },
       });
-    } else {
-      if (!userId) {
-        await ensureDefaultUser();
-      }
+
+      projectId = projectId || conversation?.projectId || null;
+
+      const messages = await db.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: "asc" },
+        take: 20,
+      });
+
+      conversationHistory = messages
+        .filter((entry) => entry.role === "user" || entry.role === "assistant")
+        .map((entry) => ({
+          role: entry.role as "user" | "assistant",
+          content: entry.content,
+        }));
+    }
+
+    if (projectId && !(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (!conversation) {
       conversation = await db.conversation.create({
         data: {
-          userId: userId || DEFAULT_USER_ID,
-          projectId,
+          userId: auth.user.id,
+          projectId: projectId || undefined,
           module: module || "agent",
-          title: message.slice(0, 50),
+          title: createConversationListTitle(message || "", effectiveAction || null),
         },
       });
     }
 
-    // Save user message
-    await db.message.create({
+    const normalizedMessage = (message || (effectiveAction ? getActionPrompt(effectiveAction) : "")).trim();
+    const projectContext = await getProjectContext(projectId);
+    const customAgentMatch = !effectiveAction
+      ? detectCustomAgentMatch(
+          normalizedMessage,
+          await loadUserCustomAgents(auth.user.id, {
+            enabledOnly: true,
+            executionMode: "chat-capable",
+          }),
+          auth.user.level ?? 0
+        )
+      : null;
+
+    if (effectiveAction || customAgentMatch) {
+      await assertBillingLimit({
+        userId: auth.user.id,
+        metricKey: "agent_runs",
+        quantity: 1,
+      });
+    }
+
+    await assertBillingLimit({
+      userId: auth.user.id,
+      metricKey: "ai_messages",
+      quantity: 1,
+    });
+
+    let skill = effectiveAction
+      ? "project_manager_skill"
+      : customAgentMatch
+        ? customAgentMatch.agent.baseSkill
+        : await resolveEnabledSkill(detectSkill(normalizedMessage));
+    let tool: string | undefined;
+
+    const userMessage = await db.message.create({
       data: {
         conversationId: conversation.id,
         role: "user",
-        content: message,
+        content: normalizedMessage,
         skill,
       },
     });
 
-    // Build final messages array
-    const messages = [
-      { role: "assistant", content: systemPrompt },
-      ...conversationHistory,
-      { role: "user", content: message },
-    ];
+    let assistantContent = "";
+    let provider = "safe-action";
+    let model: string | null = null;
+    let agentRunId: string | undefined;
 
-    // Get completion
-    const completion = await zai.chat.completions.create({
-      messages: messages as Array<{ role: "user" | "assistant"; content: string }>,
-      thinking: { type: "disabled" },
-    });
+    if (effectiveAction) {
+      const safeResult = await runSafeAgentAction({
+        action: effectiveAction,
+        userId: auth.user.id,
+        userLevel: auth.user.level ?? 0,
+        projectId,
+        prompt: message,
+        workspace,
+        conversationId: conversation.id,
+        trigger: autoOrchestrate ? "auto-chat" : action ? "quick-action" : "chat",
+      });
+      assistantContent = safeResult.content;
+      skill = safeResult.skill;
+      tool = safeResult.tool;
+      agentRunId = safeResult.runId;
+    } else if (customAgentMatch) {
+      const customResult = await runCustomConfiguredAgent({
+        agent: customAgentMatch.agent,
+        userId: auth.user.id,
+        userLevel: auth.user.level ?? 0,
+        projectId,
+        conversationId: conversation.id,
+        message: normalizedMessage,
+        messages: conversationHistory,
+        workspace,
+        triggerReason: customAgentMatch.reason,
+      });
 
-    const aiResponse = completion.choices[0]?.message?.content || "No pude procesar tu solicitud. Por favor intenta de nuevo.";
+      assistantContent = customResult.content;
+      skill = customResult.skill;
+      tool = customResult.tool;
+      agentRunId = customResult.runId;
+      provider = customResult.provider;
+      model = customResult.model;
+    } else {
+      const providerStatus = await getAiSettingsResponse(auth.user.id);
+      const instructions = buildAgentInstructions({
+        basePrompt: SKILL_PROMPTS[skill],
+        projectContextPrompt: buildProjectContextPrompt(projectContext),
+        providerStatus,
+      });
 
-    // Save assistant message
+      const reply = await generateAgentReply({
+        instructions,
+        messages: [...conversationHistory, { role: "user", content: normalizedMessage }],
+        userId: auth.user.id,
+      });
+
+      assistantContent = reply.content;
+      provider = reply.provider;
+      model = reply.model;
+    }
+
     const savedMessage = await db.message.create({
       data: {
         conversationId: conversation.id,
         role: "assistant",
-        content: aiResponse,
+        content: assistantContent,
         skill,
+        tool,
       },
     });
+
+    await db.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        title: conversation.title || createConversationListTitle(normalizedMessage, effectiveAction || null),
+        updatedAt: new Date(),
+      },
+    });
+
+    await recordBillingUsage({
+      userId: auth.user.id,
+      metricKey: "ai_messages",
+      quantity: 1,
+      source: "chat.reply",
+      referenceId: conversation.id,
+      referenceType: "conversation",
+      metadata: {
+        provider,
+        model,
+        projectId,
+        action: effectiveAction || null,
+      },
+    });
+
+    if (effectiveAction || customAgentMatch) {
+      await recordBillingUsage({
+        userId: auth.user.id,
+        metricKey: "agent_runs",
+        quantity: 1,
+        source: effectiveAction ? "chat.safe-action" : "chat.custom-agent",
+        referenceId: agentRunId || conversation.id,
+        referenceType: agentRunId ? "agent-run" : "conversation",
+        metadata: {
+          action: effectiveAction || null,
+          customAgentId: customAgentMatch?.agent.id || null,
+          projectId,
+        },
+      });
+    }
 
     return NextResponse.json({
       success: true,
       data: {
         message: savedMessage,
         skill,
+        tool,
+        provider,
+        model,
         conversationId: conversation.id,
+        userMessageId: userMessage.id,
+        runId: agentRunId,
       },
     });
   } catch (error) {
@@ -242,34 +467,86 @@ export async function POST(request: NextRequest) {
         success: false,
         error: error instanceof Error ? error.message : "Internal server error",
       },
-      { status: 500 }
+      { status: error instanceof BillingLimitError ? error.status : 500 }
     );
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const conversationId = searchParams.get("conversationId");
+    const projectId = searchParams.get("projectId");
+    const moduleFilter = searchParams.get("module");
+    const limit = Number(searchParams.get("limit") || 20);
+    const userId = resolveScopedUserId(auth.user, searchParams.get("userId"));
 
-    if (!conversationId) {
+    if (projectId && !(await canAccessProject(auth.user, projectId))) {
       return NextResponse.json(
-        { success: false, error: "Conversation ID is required" },
-        { status: 400 }
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
       );
     }
 
-    const messages = await db.message.findMany({
-      where: { conversationId },
-      orderBy: { createdAt: "asc" },
+    if (conversationId) {
+      if (!(await canAccessConversation(auth.user, conversationId))) {
+        return NextResponse.json(
+          { success: false, error: "Conversation not found or access denied" },
+          { status: 404 }
+        );
+      }
+
+      const messages = await db.message.findMany({
+        where: { conversationId },
+        orderBy: { createdAt: "asc" },
+      });
+
+      return NextResponse.json({
+        success: true,
+        data: messages,
+      });
+    }
+
+    const conversations = await db.conversation.findMany({
+      where: {
+        userId,
+        ...(projectId ? { projectId } : {}),
+        ...(moduleFilter ? { module: moduleFilter } : {}),
+      },
+      include: {
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+        _count: {
+          select: {
+            messages: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: Number.isFinite(limit) ? limit : 20,
     });
 
     return NextResponse.json({
       success: true,
-      data: messages,
+      data: conversations.map((conversation) => ({
+        id: conversation.id,
+        userId: conversation.userId,
+        projectId: conversation.projectId,
+        title: conversation.title,
+        module: conversation.module,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+        preview: conversation.messages[0]?.content || "",
+        messageCount: conversation._count.messages,
+      })),
     });
   } catch (error) {
-    console.error("Get messages error:", error);
+    console.error("Get chat error:", error);
     return NextResponse.json(
       { success: false, error: "Internal server error" },
       { status: 500 }

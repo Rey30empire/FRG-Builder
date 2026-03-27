@@ -1,18 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeEmail } from "@/lib/api-serializers";
+import {
+  canAccessEmail,
+  canAccessEstimate,
+  canAccessLead,
+  canAccessProject,
+  resolveScopedUserId,
+} from "@/lib/access-control";
+import { requireSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { DEFAULT_USER_ID, ensureDefaultUser } from "@/lib/default-user";
 import { stringifyJson } from "@/lib/json";
 import { logActivity } from "@/lib/activity-log";
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get("userId") || DEFAULT_USER_ID;
+    const userId = resolveScopedUserId(auth.user, searchParams.get("userId"));
     const leadId = searchParams.get("leadId");
     const projectId = searchParams.get("projectId");
     const estimateId = searchParams.get("estimateId");
     const status = searchParams.get("status");
+
+    if (leadId && !(await canAccessLead(auth.user, leadId))) {
+      return NextResponse.json(
+        { success: false, error: "Lead not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (projectId && !(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (estimateId && !(await canAccessEstimate(auth.user, estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
+      );
+    }
 
     const emails = await db.email.findMany({
       where: {
@@ -40,9 +71,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
     const {
-      userId,
       leadId,
       projectId,
       estimateId,
@@ -61,13 +94,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!userId) {
-      await ensureDefaultUser();
+    if (leadId && !(await canAccessLead(auth.user, leadId))) {
+      return NextResponse.json(
+        { success: false, error: "Lead not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (projectId && !(await canAccessProject(auth.user, projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (estimateId && !(await canAccessEstimate(auth.user, estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
+      );
     }
 
     const email = await db.email.create({
       data: {
-        userId: userId || DEFAULT_USER_ID,
+        userId: auth.user.id,
         leadId,
         projectId,
         estimateId,
@@ -81,7 +131,7 @@ export async function POST(request: NextRequest) {
     });
 
     await logActivity({
-      userId: userId || DEFAULT_USER_ID,
+      userId: auth.user.id,
       action: status === "sent" ? "send" : "create",
       entity: "email",
       entityId: email.id,
@@ -110,13 +160,45 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ("response" in auth) return auth.response;
+
     const body = await request.json();
-    const { id, metadata, sentAt, ...updates } = body;
+    const { id, userId: _userId, metadata, sentAt, ...updates } = body;
 
     if (!id) {
       return NextResponse.json(
         { success: false, error: "Email ID is required" },
         { status: 400 }
+      );
+    }
+
+    const emailAccess = await canAccessEmail(auth.user, id);
+    if (!emailAccess) {
+      return NextResponse.json(
+        { success: false, error: "Email not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (updates.leadId && !(await canAccessLead(auth.user, updates.leadId))) {
+      return NextResponse.json(
+        { success: false, error: "Lead not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (updates.projectId && !(await canAccessProject(auth.user, updates.projectId))) {
+      return NextResponse.json(
+        { success: false, error: "Project not found or access denied" },
+        { status: 404 }
+      );
+    }
+
+    if (updates.estimateId && !(await canAccessEstimate(auth.user, updates.estimateId))) {
+      return NextResponse.json(
+        { success: false, error: "Estimate not found or access denied" },
+        { status: 404 }
       );
     }
 

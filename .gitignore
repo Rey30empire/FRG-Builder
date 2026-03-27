@@ -37,6 +37,7 @@ db/*.db-*
 !db/.gitkeep
 public/uploads/documents/*
 !public/uploads/documents/.gitkeep
+backups/
 
 # debug
 npm-debug.log*
