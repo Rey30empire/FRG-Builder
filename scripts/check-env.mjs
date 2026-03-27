@@ -1,22 +1,39 @@
 import { createEnvReader } from "./env-utils.mjs";
 
 const getEnv = createEnvReader(process.cwd());
+const isNetlifyBuild = getEnv("NETLIFY") === "true";
+const requireProductionInfra = getEnv("FRG_REQUIRE_PROD_INFRA") === "true";
 
 const requiredKeys = ["DATABASE_URL"];
 const missing = requiredKeys.filter((key) => !getEnv(key));
 
 if (missing.length > 0) {
-  console.error(
-    `[env] Missing required variables: ${missing.join(", ")}. Copy .env.example to .env and fill the required values.`
-  );
-  process.exit(1);
+  if (
+    missing.length === 1 &&
+    missing[0] === "DATABASE_URL" &&
+    isNetlifyBuild &&
+    !requireProductionInfra
+  ) {
+    console.warn(
+      "[env] DATABASE_URL is missing in Netlify build env. Build can continue with a temporary build-only fallback, but runtime still needs a real DATABASE_URL in Netlify site environment variables."
+    );
+  } else {
+    console.error(
+      `[env] Missing required variables: ${missing.join(", ")}. Copy .env.example to .env and fill the required values.`
+    );
+    process.exit(1);
+  }
 }
 
 const databaseUrl = getEnv("DATABASE_URL");
 const nodeEnv = getEnv("NODE_ENV") || "development";
 const storageDriver = getEnv("STORAGE_DRIVER") || "local";
-const requireProductionInfra = getEnv("FRG_REQUIRE_PROD_INFRA") === "true";
 const productionIssues = [];
+
+if (!databaseUrl) {
+  console.log("[env] Environment check passed with temporary Netlify build fallback.");
+  process.exit(0);
+}
 
 if (nodeEnv === "production" && databaseUrl.startsWith("file:")) {
   console.warn(

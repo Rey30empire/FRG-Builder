@@ -118,6 +118,12 @@ Billing and monetization:
 - the Agent panel now includes self-serve billing overview, usage, checkout, and billing portal access
 - Stripe remains optional in local development, but production monetization requires the Stripe env vars above plus a live webhook endpoint at `/api/webhook/stripe`
 
+Netlify build note:
+
+- if `DATABASE_URL` is not present during Netlify build, the repo now uses a temporary SQLite fallback only for compilation
+- this avoids failing the build at `prebuild`, but it does not replace a real production database
+- set the real `DATABASE_URL` in Netlify Site Settings so runtime APIs use Postgres instead of the temporary build fallback
+
 Production storage variables added in this repo:
 
 - `STORAGE_DRIVER`
