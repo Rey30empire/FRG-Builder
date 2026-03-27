@@ -1,0 +1,421 @@
+// Builder-FRG-LLC Database Schema
+// Sistema modular con memoria, skills, permisos y proyectos
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  avatar        String?
+  role          String    @default("user") // user, admin, superadmin
+  level         Int       @default(0) // 0-4 permission levels
+  
+  // Memoria de usuario
+  userMemory    UserMemory?
+  
+  // Relaciones
+  projects      Project[]
+  conversations Conversation[]
+  learningItems LearningItem[]
+  leads         Lead[]
+  campaigns     Campaign[]
+  emails        Email[]
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model UserMemory {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id])
+  
+  // Preferencias
+  language          String   @default("es")
+  explanationStyle  String   @default("detailed") // detailed, summary
+  companyType       String?  // general_contractor, subcontractor, etc.
+  
+  // Configuración de estimación
+  preferredMargins   Float?
+  laborRates         String?  // JSON con rates por trade
+  overheadPercent    Float?
+  
+  // Aprendizaje
+  topicsStudied     String?  // JSON array
+  frequentErrors    String?  // JSON array
+  progressByArea    String?  // JSON object
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ============================================
+// COMPANY MEMORY (Configuración de la LLC)
+// ============================================
+
+model CompanyMemory {
+  id                String   @id @default(cuid())
+  
+  // Info básica
+  name              String   @default("FRG LLC")
+  specialties       String?  // JSON array
+  workZones         String?  // JSON array de zonas
+  
+  // Crew y recursos
+  crewInfo          String?  // JSON con info del crew
+  baseRates         String?  // JSON con rates base
+  
+  // Branding
+  logo              String?
+  primaryColor      String?
+  proposalTemplate  String?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ============================================
+// PROJECTS & DOCUMENTS
+// ============================================
+
+model Project {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  
+  // Info del proyecto
+  name            String
+  address         String?
+  client          String?
+  clientEmail     String?
+  clientPhone     String?
+  deadline        DateTime?
+  status          String   @default("active") // active, completed, archived
+  
+  // Memoria del proyecto
+  documents       Document[]
+  estimates       Estimate[]
+  emails          Email[]
+  projectMemory   ProjectMemory?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ProjectMemory {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  project         Project  @relation(fields: [projectId], references: [id])
+  
+  // Documentación
+  addendas        String?  // JSON array
+  versions        String?  // JSON con versiones de estimación
+  exclusions      String?  // JSON array
+  notes           String?  // Notas varias
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Document {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id])
+  
+  // Archivo
+  name            String
+  originalName    String
+  type            String   // pdf, image, etc.
+  path            String
+  size            Int?
+  
+  // Clasificación
+  trade           String?  // electrical, plumbing, drywall, etc.
+  category        String?  // plan, spec, addenda, contract
+  pageNumber      Int?
+  
+  // Análisis
+  analyzed        Boolean  @default(false)
+  analysisResult  String?  // JSON con resultado del análisis
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// ESTIMATES & TAKEOFF
+// ============================================
+
+model Estimate {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id])
+  
+  // Info de estimación
+  name            String
+  version         Int      @default(1)
+  status          String   @default("draft") // draft, final, sent
+  
+  // Costos
+  materialsCost   Float?
+  laborCost       Float?
+  equipmentCost   Float?
+  subtotal        Float?
+  overhead        Float?
+  profit          Float?
+  total           Float?
+  
+  // Detalles
+  takeoffItems    TakeoffItem[]
+  emails          Email[]
+  proposalData    String?
+  
+  // Tiempo y condiciones
+  duration        Int?     // días estimados
+  weatherFactor   Float?
+  riskFactor      Float?
+  sentAt          DateTime?
+  viewedAt        DateTime?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model TakeoffItem {
+  id              String   @id @default(cuid())
+  estimateId      String
+  estimate        Estimate @relation(fields: [estimateId], references: [id])
+  
+  // Item
+  trade           String
+  description     String
+  quantity        Float
+  unit            String   // sf, lf, ea, etc.
+  
+  // Costos
+  materialCost    Float?
+  laborCost       Float?
+  totalCost       Float?
+  
+  // Fuente
+  sourcePage      String?
+  sourceDocument  String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// CONVERSATIONS & AGENT CORE
+// ============================================
+
+model Conversation {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  projectId       String?
+  
+  // Contexto
+  title           String?
+  module          String?  // estimate, learn, boost, agent
+  
+  // Mensajes
+  messages        Message[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Message {
+  id              String        @id @default(cuid())
+  conversationId  String
+  conversation    Conversation  @relation(fields: [conversationId], references: [id])
+  
+  // Mensaje
+  role            String  // user, assistant, system
+  content         String
+  
+  // Metadata
+  skill           String?  // skill que procesó
+  tool            String?  // tool usada
+  tokens          Int?
+  
+  createdAt       DateTime @default(now())
+}
+
+// ============================================
+// FRG LEARN - Learning Module
+// ============================================
+
+model LearningItem {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  
+  // Contenido
+  title           String
+  category        String   // framing, electrical, plumbing, etc.
+  level           String   @default("beginner") // beginner, intermediate, advanced
+  type            String   // lesson, exercise, exam
+  
+  // Progreso
+  completed       Boolean  @default(false)
+  score           Float?
+  timeSpent       Int?     // minutos
+  
+  // Contenido
+  content         String?  // JSON con el contenido
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// FRG BOOST - CRM & Marketing
+// ============================================
+
+model Lead {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  
+  // Info del lead
+  name            String
+  email           String?
+  phone           String?
+  company         String?
+  source          String?  // referral, website, cold_outreach
+  
+  // Estado
+  status          String   @default("new") // new, contacted, qualified, proposal, closed
+  
+  // Tracking
+  interactions    String?  // JSON array de interacciones
+  nextFollowUp    DateTime?
+  notes           String?
+  
+  // Relaciones
+  emails          Email[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  
+  // Campaña
+  name            String
+  type            String   // email, social, ads
+  target          String?  // kitchen_remodel, bathroom, etc.
+  status          String   @default("draft") // draft, active, completed
+  
+  // Contenido
+  content         String?  // JSON con posts/emails
+  
+  // Métricas
+  sent            Int?
+  opened          Int?
+  clicked         Int?
+  converted       Int?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Email {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  leadId          String?
+  lead            Lead?    @relation(fields: [leadId], references: [id])
+  projectId       String?
+  project         Project? @relation(fields: [projectId], references: [id])
+  estimateId      String?
+  estimate        Estimate? @relation(fields: [estimateId], references: [id])
+  
+  // Email
+  subject         String
+  body            String
+  type            String   // outreach, followup, proposal
+  metadata        String?  // JSON con adjuntos, CTA y trazabilidad
+  
+  // Estado
+  status          String   @default("draft") // draft, sent, delivered, opened
+  
+  sentAt          DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// SKILLS & TOOLS CONFIGURATION
+// ============================================
+
+model Skill {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  displayName     String
+  description     String?
+  module          String   // estimate, learn, boost, agent
+  
+  // Configuración
+  enabled         Boolean  @default(true)
+  config          String?  // JSON con configuración
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Tool {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  displayName     String
+  description     String?
+  
+  // Configuración
+  enabled         Boolean  @default(true)
+  requiredLevel   Int      @default(0) // nivel mínimo de permiso
+  config          String?  // JSON con configuración
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// LOGS & ACTIVITY
+// ============================================
+
+model ActivityLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  
+  // Acción
+  action          String   // create, update, delete, export, send
+  entity          String   // project, estimate, email, etc.
+  entityId        String?
+  
+  // Detalles
+  details         String?  // JSON con detalles
+  skill           String?
+  tool            String?
+  
+  createdAt       DateTime @default(now())
+}
