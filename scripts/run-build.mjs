@@ -9,6 +9,16 @@ if (!env.DATABASE_URL && env.NETLIFY === "true") {
   );
 }
 
+const prismaGenerate = spawnSync("npx", ["prisma", "generate"], {
+  stdio: "inherit",
+  shell: true,
+  env,
+});
+
+if (prismaGenerate.status !== 0) {
+  process.exit(prismaGenerate.status ?? 1);
+}
+
 const nextBuild = spawnSync("npx", ["next", "build"], {
   stdio: "inherit",
   shell: true,

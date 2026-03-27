@@ -6,6 +6,8 @@ const globalForPrisma = globalThis as unknown as {
 
 type AppPrismaClient = PrismaClient & {
   customAgent: any;
+  agentRun: any;
+  agentRunStep: any;
 };
 
 export const db =

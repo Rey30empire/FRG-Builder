@@ -14,7 +14,7 @@
     "prebuild": "npm run check:env",
     "build": "node scripts/run-build.mjs",
     "start": "node .next/standalone/server.js",
-    "postinstall": "node scripts/ensure-native-optional-deps.mjs",
+    "postinstall": "node scripts/ensure-native-optional-deps.mjs && prisma generate",
     "lint": "eslint src prisma scripts next.config.ts tailwind.config.ts eslint.config.mjs postcss.config.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
