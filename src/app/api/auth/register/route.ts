@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { serializeUser } from "@/lib/api-serializers";
 import {
   applySessionCookie,
+  createDatabaseUnavailableResponse,
   createSession,
+  DatabaseConfigurationError,
   hashPassword,
   normalizeEmail,
 } from "@/lib/auth";
 import { DEFAULT_AI_SETTINGS } from "@/lib/ai-settings";
-import { db } from "@/lib/db";
+import { db, hasDatabaseUrlConfigured } from "@/lib/db";
 import { stringifyJson } from "@/lib/json";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { buildWorkspaceMemoryDefaults } from "@/lib/user-workspace";
@@ -18,6 +20,10 @@ function normalizeName(name?: string) {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!hasDatabaseUrlConfigured()) {
+      return createDatabaseUnavailableResponse();
+    }
+
     const limited = enforceRateLimit(request, "auth-register", {
       windowMs: 1000 * 60 * 15,
       max: 8,
@@ -89,6 +95,10 @@ export async function POST(request: NextRequest) {
 
     return response;
   } catch (error) {
+    if (error instanceof DatabaseConfigurationError) {
+      return createDatabaseUnavailableResponse();
+    }
+
     console.error("Register error:", error);
     return NextResponse.json(
       {

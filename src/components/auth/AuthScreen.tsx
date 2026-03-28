@@ -18,8 +18,10 @@ interface SessionEnvelope {
 
 export function AuthScreen({
   onAuthenticated,
+  systemNotice,
 }: {
   onAuthenticated: (user: AppUser) => void;
+  systemNotice?: string | null;
 }) {
   const [mode, setMode] = React.useState<"signin" | "register">("signin");
   const [name, setName] = React.useState("");
@@ -144,9 +146,16 @@ export function AuthScreen({
               </div>
             ) : null}
 
+            {systemNotice ? (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{systemNotice}</span>
+              </div>
+            ) : null}
+
             <Button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || Boolean(systemNotice)}
               className="w-full bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-600 hover:to-orange-700"
             >
               {isLoading ? (

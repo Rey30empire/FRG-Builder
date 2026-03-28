@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeUser } from "@/lib/api-serializers";
-import { getSessionUser } from "@/lib/auth";
+import {
+  createDatabaseUnavailableResponse,
+  DatabaseConfigurationError,
+  getSessionUser,
+} from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,6 +17,10 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof DatabaseConfigurationError) {
+      return createDatabaseUnavailableResponse();
+    }
+
     console.error("Session error:", error);
     return NextResponse.json(
       { success: false, error: "Internal server error" },

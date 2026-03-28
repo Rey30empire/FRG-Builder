@@ -1,9 +1,31 @@
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, hasDatabaseUrlConfigured } from "@/lib/db";
 
 export const SESSION_COOKIE_NAME = "frg_session";
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
+export const DATABASE_ENV_ERROR =
+  "DATABASE_URL is missing in this deployment. Add it in Netlify site environment variables.";
+
+export class DatabaseConfigurationError extends Error {
+  status: number;
+
+  constructor(message = DATABASE_ENV_ERROR, status = 503) {
+    super(message);
+    this.name = "DatabaseConfigurationError";
+    this.status = status;
+  }
+}
+
+export function createDatabaseUnavailableResponse() {
+  return Response.json(
+    {
+      success: false,
+      error: DATABASE_ENV_ERROR,
+    },
+    { status: 503 }
+  );
+}
 
 export type SessionUser = NonNullable<
   Awaited<ReturnType<typeof getSessionUser>>
@@ -44,6 +66,10 @@ export function hashSessionToken(token: string) {
 }
 
 export async function createSession(userId: string) {
+  if (!hasDatabaseUrlConfigured()) {
+    throw new DatabaseConfigurationError();
+  }
+
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
@@ -60,6 +86,10 @@ export async function createSession(userId: string) {
 }
 
 export async function deleteSession(token?: string | null) {
+  if (!hasDatabaseUrlConfigured()) {
+    return;
+  }
+
   if (!token) {
     return;
   }
@@ -74,6 +104,10 @@ export async function deleteSession(token?: string | null) {
 }
 
 export async function getSessionUser(request: NextRequest) {
+  if (!hasDatabaseUrlConfigured()) {
+    throw new DatabaseConfigurationError();
+  }
+
   const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
   if (!sessionToken) {
@@ -106,6 +140,12 @@ export async function getSessionUser(request: NextRequest) {
 }
 
 export async function requireSessionUser(request: NextRequest) {
+  if (!hasDatabaseUrlConfigured()) {
+    return {
+      response: createDatabaseUnavailableResponse(),
+    };
+  }
+
   const user = await getSessionUser(request);
 
   if (!user) {
@@ -121,6 +161,12 @@ export async function requireSessionUser(request: NextRequest) {
 }
 
 export async function requireAdminSessionUser(request: NextRequest) {
+  if (!hasDatabaseUrlConfigured()) {
+    return {
+      response: createDatabaseUnavailableResponse(),
+    };
+  }
+
   const auth = await requireSessionUser(request);
 
   if ("response" in auth) {

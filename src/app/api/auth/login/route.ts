@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serializeUser } from "@/lib/api-serializers";
-import { applySessionCookie, createSession, normalizeEmail, verifyPassword } from "@/lib/auth";
+import {
+  applySessionCookie,
+  createDatabaseUnavailableResponse,
+  createSession,
+  DatabaseConfigurationError,
+  normalizeEmail,
+  verifyPassword,
+} from "@/lib/auth";
+import { hasDatabaseUrlConfigured } from "@/lib/db";
 import { db } from "@/lib/db";
 import { ensureSystemUsers } from "@/lib/default-user";
 import { enforceRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
+    if (!hasDatabaseUrlConfigured()) {
+      return createDatabaseUnavailableResponse();
+    }
+
     const limited = enforceRateLimit(request, "auth-login", {
       windowMs: 1000 * 60 * 15,
       max: 10,
@@ -50,6 +62,10 @@ export async function POST(request: NextRequest) {
 
     return response;
   } catch (error) {
+    if (error instanceof DatabaseConfigurationError) {
+      return createDatabaseUnavailableResponse();
+    }
+
     console.error("Login error:", error);
     return NextResponse.json(
       { success: false, error: "Internal server error" },

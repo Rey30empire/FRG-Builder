@@ -21,11 +21,13 @@ interface SessionEnvelope {
   data?: {
     user: AppUser | null;
   };
+  error?: string;
 }
 
 export default function BuilderFRGLLC() {
   const { activeModule, sidebarOpen, setActiveUser, setAvailableUsers } = useAppStore();
   const [authState, setAuthState] = React.useState<"loading" | "authenticated" | "unauthenticated">("loading");
+  const [serviceError, setServiceError] = React.useState<string | null>(null);
 
   const syncSession = React.useEffectEvent(async () => {
     const response = await fetch("/api/auth/session", {
@@ -33,12 +35,14 @@ export default function BuilderFRGLLC() {
     });
 
     const payload = (await response.json()) as SessionEnvelope;
+    const hasServiceError = !response.ok && Boolean(payload.error);
     const nextUser = payload.success ? payload.data?.user || null : null;
 
     React.startTransition(() => {
       setActiveUser(nextUser);
       setAvailableUsers(nextUser ? [nextUser] : []);
       setAuthState(nextUser ? "authenticated" : "unauthenticated");
+      setServiceError(hasServiceError ? payload.error || "Service configuration incomplete" : null);
     });
   });
 
@@ -92,10 +96,12 @@ export default function BuilderFRGLLC() {
   if (authState === "unauthenticated") {
     return (
       <AuthScreen
+        systemNotice={serviceError}
         onAuthenticated={(user) => {
           setActiveUser(user);
           setAvailableUsers([user]);
           setAuthState("authenticated");
+          setServiceError(null);
         }}
       />
     );

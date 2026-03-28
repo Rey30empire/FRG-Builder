@@ -10,6 +10,10 @@ type AppPrismaClient = PrismaClient & {
   agentRunStep: any;
 };
 
+export function hasDatabaseUrlConfigured() {
+  return Boolean(process.env.DATABASE_URL?.trim());
+}
+
 export const db =
   globalForPrisma.prisma ??
   (new PrismaClient({
