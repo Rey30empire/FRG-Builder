@@ -48,8 +48,25 @@ export function loadEnvFiles(root = process.cwd()) {
 export function createEnvReader(root = process.cwd()) {
   const loadedEnv = loadEnvFiles(root);
 
-  return function getEnv(key) {
+  function readRawEnv(key) {
     return process.env[key] || loadedEnv[key] || "";
+  }
+
+  return function getEnv(key) {
+    if (key === "DATABASE_URL") {
+      return readRawEnv("DATABASE_URL") || readRawEnv("NETLIFY_DATABASE_URL");
+    }
+
+    if (key === "DIRECT_URL") {
+      return (
+        readRawEnv("DIRECT_URL") ||
+        readRawEnv("NETLIFY_DATABASE_URL_UNPOOLED") ||
+        readRawEnv("DATABASE_URL") ||
+        readRawEnv("NETLIFY_DATABASE_URL")
+      );
+    }
+
+    return readRawEnv(key);
   };
 }
 

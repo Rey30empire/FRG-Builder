@@ -1,5 +1,5 @@
 import { loadAiSettingsResponse } from "@/lib/ai-settings";
-import { db } from "@/lib/db";
+import { db, getConfiguredDatabaseUrl } from "@/lib/db";
 
 type HealthStatus = "healthy" | "warning" | "critical";
 
@@ -73,7 +73,7 @@ function resolveEmailHealth() {
 }
 
 function resolveDatabaseDriver() {
-  const url = process.env.DATABASE_URL || "";
+  const url = getConfiguredDatabaseUrl();
 
   if (url.startsWith("postgres")) {
     return {

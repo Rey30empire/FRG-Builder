@@ -2,14 +2,14 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { loadAiSettingsResponse } from "@/lib/ai-settings";
-import { db } from "@/lib/db";
+import { db, getConfiguredDatabaseUrl } from "@/lib/db";
 import { parseJsonField } from "@/lib/json";
 import { buildOperationsOverview } from "@/lib/operations";
 import { getCapabilitiesForLevel } from "@/lib/permissions";
 import type { PermissionLevel } from "@/types";
 
 function getDatabaseSummary() {
-  const databaseUrl = process.env.DATABASE_URL || "";
+  const databaseUrl = getConfiguredDatabaseUrl();
 
   if (databaseUrl.startsWith("postgres")) {
     return { kind: "postgres", label: "Postgres", status: "healthy" as const };

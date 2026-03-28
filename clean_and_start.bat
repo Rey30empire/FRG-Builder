@@ -10,7 +10,6 @@ echo Este script usa solo la app raiz.
 echo Los proyectos anidados quedan fuera del flujo principal.
 echo.
 
-if not exist "db" mkdir "db"
 if not exist "public\uploads" mkdir "public\uploads"
 if not exist "public\uploads\documents" mkdir "public\uploads\documents"
 
@@ -33,7 +32,7 @@ call npm install
 if errorlevel 1 exit /b 1
 
 echo ==========================================
-echo Preparando base de datos...
+echo Preparando conexion a Postgres...
 echo ==========================================
 call npm run check:env
 if errorlevel 1 exit /b 1

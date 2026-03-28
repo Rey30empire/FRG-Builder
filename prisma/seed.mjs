@@ -1586,7 +1586,7 @@ async function seedOperationsData() {
       status: "open",
       source: "health-scan",
       details: JSON.stringify({
-        database: "sqlite",
+        database: "postgres",
         storage: "local",
       }),
       startedAt: new Date("2026-03-27T08:00:00.000Z"),

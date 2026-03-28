@@ -5,7 +5,7 @@ import { db, hasDatabaseUrlConfigured } from "@/lib/db";
 export const SESSION_COOKIE_NAME = "frg_session";
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
 export const DATABASE_ENV_ERROR =
-  "DATABASE_URL is missing in this deployment. Add it in Netlify site environment variables.";
+  "Database is not configured in this deployment. Connect Netlify DB / Neon or set DATABASE_URL.";
 
 export class DatabaseConfigurationError extends Error {
   status: number;

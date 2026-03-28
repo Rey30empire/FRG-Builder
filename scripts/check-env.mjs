@@ -15,7 +15,7 @@ if (missing.length > 0) {
     !requireProductionInfra
   ) {
     console.warn(
-      "[env] DATABASE_URL is missing in Netlify build env. Build can continue with a temporary build-only fallback, but runtime still needs a real DATABASE_URL in Netlify site environment variables."
+      "[env] DATABASE_URL is missing in Netlify build env. Build can continue with a temporary build-only Postgres fallback, but runtime still needs a real database connection through Netlify DB/Neon or DATABASE_URL."
     );
   } else {
     console.error(

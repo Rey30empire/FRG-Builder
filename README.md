@@ -18,7 +18,7 @@ The current app includes these main modules:
 - Next.js 16 App Router
 - React 19
 - Prisma
-- SQLite for local development
+- PostgreSQL / Neon
 - Tailwind CSS 4 + shadcn/ui
 - Zustand
 - Netlify deployment target
@@ -28,8 +28,9 @@ The current app includes these main modules:
 
 - The root app is the only canonical product.
 - Nested legacy projects remain in the workspace for reference but are ignored by Git.
-- Local SQLite is acceptable for development only.
-- Production should move to managed Postgres and durable object storage.
+- Local and production environments should use Postgres-compatible databases.
+- Netlify DB / Neon is the recommended production path for this repo.
+- Production should use managed Postgres and durable object storage.
 
 ## Local Setup
 
@@ -40,7 +41,7 @@ The current app includes these main modules:
 npm install
 ```
 
-3. Generate Prisma client and sync the local database:
+3. Generate Prisma client and sync the database:
 
 ```bash
 npm run db:generate
@@ -70,15 +71,23 @@ clean_and_start.bat
 
 ## Environment
 
-Minimum required variable:
+Minimum required variables:
 
 - `DATABASE_URL`
+- `DIRECT_URL`
 
-Local default:
+Recommended default:
 
 ```env
-DATABASE_URL="file:../db/custom.db"
+DATABASE_URL="postgresql://user:password@host:5432/frg_builder?schema=public"
+DIRECT_URL="postgresql://user:password@host:5432/frg_builder?schema=public"
 ```
+
+Netlify DB / Neon:
+
+- the Netlify Neon extension creates `NETLIFY_DATABASE_URL` and `NETLIFY_DATABASE_URL_UNPOOLED`
+- this repo now maps those automatically to Prisma's expected `DATABASE_URL` and `DIRECT_URL`
+- you do not need to duplicate them manually if the extension is connected to the site
 
 Recommended future production variables:
 
@@ -120,9 +129,10 @@ Billing and monetization:
 
 Netlify build note:
 
-- if `DATABASE_URL` is not present during Netlify build, the repo now uses a temporary SQLite fallback only for compilation
-- this avoids failing the build at `prebuild`, but it does not replace a real production database
-- set the real `DATABASE_URL` in Netlify Site Settings so runtime APIs use Postgres instead of the temporary build fallback
+- if neither `DATABASE_URL` nor `NETLIFY_DATABASE_URL` is present during Netlify build, the repo now uses a temporary Postgres-shaped fallback only for compilation
+- this avoids failing the build at `prebuild`, but it does not replace a real runtime database
+- once Netlify DB / Neon is connected, the app and Prisma scripts will use `NETLIFY_DATABASE_URL` and `NETLIFY_DATABASE_URL_UNPOOLED` automatically
+- during a real Netlify build with Neon connected, the build now runs `prisma db push` automatically so the database schema is created or updated before runtime
 
 Production storage variables added in this repo:
 
@@ -151,7 +161,7 @@ Production storage variables added in this repo:
 - `npm run db:migrate`: runs Prisma development migrations.
 - `npm run db:seed`: seeds local development data.
 - `npm run infra:check`: fails if the app is not production-ready for Postgres + durable storage.
-- `npm run ops:backup:local`: creates a timestamped backup of the local SQLite DB and uploaded files.
+- `npm run ops:backup:local`: creates a timestamped backup of the local SQLite DB and uploaded files when a legacy SQLite dev database is still in use.
 - `npm run ops:cleanup:storage`: removes orphaned local uploads that are no longer referenced in the DB.
 - `npm run build`: validates env and creates the production build.
 - `npm run verify`: runs lint, typecheck, tests, Prisma generate/push, and build.

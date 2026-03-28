@@ -1,15 +1,27 @@
 import { spawnSync } from "node:child_process";
 
 const env = { ...process.env };
+let usingTemporaryBuildDatabase = false;
+
+if (!env.DATABASE_URL && env.NETLIFY_DATABASE_URL) {
+  env.DATABASE_URL = env.NETLIFY_DATABASE_URL;
+}
+
+if (!env.DIRECT_URL) {
+  env.DIRECT_URL =
+    env.NETLIFY_DATABASE_URL_UNPOOLED || env.DATABASE_URL || env.NETLIFY_DATABASE_URL || "";
+}
 
 if (!env.DATABASE_URL && env.NETLIFY === "true") {
-  env.DATABASE_URL = "file:../db/netlify-build.db";
+  env.DATABASE_URL = "postgresql://build:build@127.0.0.1:5432/frg_builder?schema=public";
+  env.DIRECT_URL = env.DATABASE_URL;
+  usingTemporaryBuildDatabase = true;
   console.warn(
-    "[build] Injected temporary SQLite DATABASE_URL for Netlify build only. Configure a real DATABASE_URL in Netlify environment variables for runtime."
+    "[build] Injected temporary Postgres DATABASE_URL for Netlify build only. Connect Netlify DB/Neon or configure a real DATABASE_URL for runtime."
   );
 }
 
-const prismaGenerate = spawnSync("npx", ["prisma", "generate"], {
+const prismaGenerate = spawnSync("node", ["scripts/run-prisma-command.mjs", "generate"], {
   stdio: "inherit",
   shell: true,
   env,
@@ -17,6 +29,18 @@ const prismaGenerate = spawnSync("npx", ["prisma", "generate"], {
 
 if (prismaGenerate.status !== 0) {
   process.exit(prismaGenerate.status ?? 1);
+}
+
+if (env.NETLIFY === "true" && !usingTemporaryBuildDatabase) {
+  const prismaPush = spawnSync("node", ["scripts/run-prisma-command.mjs", "db", "push"], {
+    stdio: "inherit",
+    shell: true,
+    env,
+  });
+
+  if (prismaPush.status !== 0) {
+    process.exit(prismaPush.status ?? 1);
+  }
 }
 
 const nextBuild = spawnSync("npx", ["next", "build"], {
